@@ -229,7 +229,8 @@ def dns_challenge_provider(provider_name: str, domain: str, access_token: str | 
         raise RuntimeError('Invalid provider')
 
 
-def perform_dns_challenge(session, privkey, account_url, new_nonce_url, authz_url, jwk, provider_name, access_token: str | None = None):
+def perform_dns_challenge(session, privkey, account_url, new_nonce_url, authz_url, jwk, provider_name,
+                          access_token: str | None = None):
     # Step 1: GET authz details
     resp = session.get(authz_url, timeout=10)
     resp.raise_for_status()
@@ -344,7 +345,8 @@ def finalize_order(session, privkey, account_url, new_nonce_url, order_data, dom
     LOG.info(f"Certificate private key saved: {domains[0]}/privkey.pem")
 
 
-def get_certificate_for_domains_dns(domains: list[str], dns_provider: str, email: str, access_token: str, renew_command: str):
+def get_certificate_for_domains_dns(domains: list[str], dns_provider: str, email: str, access_token: str,
+                                    renew_command: str):
     create_acme_account(domain=domains[0], email=email)
     LOG.info(f"Starting certificate request for domains: {domains}")
 
@@ -368,7 +370,8 @@ def get_certificate_for_domains_dns(domains: list[str], dns_provider: str, email
     LOG.info(f"Order data: {order_data}")
 
     for authz_url in order_data["authorizations"]:
-        perform_dns_challenge(session, privkey, account_url, new_nonce_url, authz_url, jwk, dns_provider, access_token=access_token)
+        perform_dns_challenge(session, privkey, account_url, new_nonce_url, authz_url, jwk, dns_provider,
+                              access_token=access_token)
 
     finalize_order(session, privkey, account_url, new_nonce_url, order_data, domains, order_url)
 
