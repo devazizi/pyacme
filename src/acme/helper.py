@@ -5,7 +5,7 @@ import time
 import base64
 import json
 from typing import Optional
-
+import datetime
 import requests
 import dns.resolver
 from cryptography.hazmat.backends import default_backend
@@ -386,3 +386,60 @@ def get_certificate_for_domains_dns(domains: list[str], dns_provider: str, email
     )
 
     cert.save(f"{PYACME_HOME_PATH}/{domains[0]}/certificate.json")
+
+def renew_certificate(cert_json_path: str):
+    if not os.path.exists(cert_json_path):
+        raise RuntimeError("No certificate.json found for domain")
+
+    with open(cert_json_path, "r") as f:
+        cert_data = json.load(f)
+
+    domain = cert_data['domain'].replace('*.', '')
+    dns_provider = cert_data["provider"]
+    access_token = cert_data.get("provider_conf")
+
+    session = requests.Session()
+    directory = get_directory(session, DIRECTORY_ADDRESS)
+    new_nonce_url = directory["newNonce"]
+
+    privkey = load_or_make_rsa_key(file_name=f"{domain}/account.key.pem")
+    jwk = jwk_from_privkey(privkey)
+    account_url = account_directory_url(domain)
+
+
+    identifiers = [{"type": "dns", "value": cert_data["domain"]}, {"type": "dns", "value": domain}]
+    resp = post_jws(session, directory["newOrder"], {"identifiers": identifiers}, privkey, new_nonce_url, kid=account_url)
+    order_data = resp.json()
+    order_url = resp.headers.get("Location")
+    if not order_url:
+        raise RuntimeError(f"No order URL returned: {order_data}")
+
+    for authz_url in order_data["authorizations"]:
+        perform_dns_challenge(
+            session=session,
+            privkey=privkey,
+            account_url=account_url,
+            new_nonce_url=new_nonce_url,
+            authz_url=authz_url,
+            jwk=jwk,
+            provider_name=dns_provider,
+            access_token=access_token
+        )
+
+    finalize_order(session, privkey, account_url, new_nonce_url, order_data, [domain, cert_data["domain"]], order_url)
+
+    cert_path = os.path.join(PYACME_HOME_PATH, domain, "cert.pem")
+
+    with open(cert_path, "rb") as f:
+        cert_obj = x509.load_pem_x509_certificate(f.read(), default_backend())
+    new_expiry_date = cert_obj.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    cert_data.update({
+        "expiry_date": new_expiry_date,
+        "last_renewed": datetime.datetime.utcnow().isoformat() + "Z",
+        "status": "valid",
+    })
+
+    with open(cert_json_path, "w") as f:
+        json.dump(cert_data, f, indent=4)
+
+    LOG.info(f"Renewal successful for {domain}")

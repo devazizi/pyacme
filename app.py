@@ -1,16 +1,35 @@
-import json
+﻿import subprocess
 import os
-
 import click
-from src.acme.helper import init_dir, get_certificate_for_domains_dns, PYACME_HOME_PATH
+from src.acme.helper import init_dir, get_certificate_for_domains_dns, PYACME_HOME_PATH, renew_certificate
 from validators import domain as domain_validator
 from tabulate import tabulate
-
+from src.common.certificates import get_certificate_list
+from datetime import datetime, timezone, timedelta
+from src.happylog import LOG
 
 SUPPORTABLE_PROVIDER = ('arvancloud', 'cloudflare', 'acmedns', 'dns')
 
 ARVANCLOUD = 'arvancloud'
 CLOUDFLARE = 'cloudflare'
+
+
+def run_renew_command_as_subprocess_command(renew_command):
+    if renew_command and renew_command.strip():
+        try:
+            LOG.info(f"Running renew command: {renew_command}")
+            subprocess.run(
+                renew_command,
+                shell=True,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            LOG.info(f"Renew command executed successfully.")
+        except subprocess.CalledProcessError as e:
+            LOG.error(f"Renew command failed: {e.stderr.strip()}")
+
 
 @click.group()
 def main_command():
@@ -29,45 +48,47 @@ def cleanup():
 
 @main_command.command(name='list', help='List of certificates')
 def certificate_list():
-    certificates = []
-
     base_dir = os.path.expanduser(PYACME_HOME_PATH)
 
     if not os.path.exists(base_dir):
         click.echo(f"Directory {base_dir} does not exist.")
         return
 
-    id = 0
-    for root, dirs, files in os.walk(base_dir):
-        if "certificate.json" in files:
-            cert_path = os.path.join(root, "certificate.json")
-            try:
-                with open(cert_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    certificates.append([
-                        id,
-                        data.get('domain'),
-                        data.get('certificate_path'),
-                        data.get('expiry_date'),
-                        data.get('status'),
-                        data.get('renew_command'),
-                        data.get('last_renewed'),
-                    ])
-                    id += 1
-            except json.JSONDecodeError as err:
-                raise err
-            except Exception as e:
-                raise e
-
+    certificates = get_certificate_list(base_dir)
     certificate_table_headers = ['ID', 'Domain', 'Certificate Path',
                                  'Expiry Date', 'Status', 'Renew command', 'Last Renew']
     print(tabulate(certificates, headers=certificate_table_headers, tablefmt="fancy_grid"))
 
 
-@main_command.command(name='renew', help='Renew certificate')
-def certificate_renew():
-    click.echo("list of certificate")
+@main_command.command(name='cron', help='Renew certificate')
+@click.option("--force-renewal", is_flag=True, help="Force renewal certificates")
+def certificate_renew(force_renewal: bool=False):
+    base_dir = os.path.expanduser(PYACME_HOME_PATH)
 
+    if not os.path.exists(base_dir):
+        click.echo(f"Directory {base_dir} does not exist.")
+        return
+
+    now = datetime.now(timezone.utc)
+    one_month_later = now + timedelta(days=30)
+
+    certificates = get_certificate_list(base_dir)
+    for certificate in certificates:
+        renew_command = certificate[5]
+        if not force_renewal:
+            certificate_domain = certificate[1]
+            expiry_date = certificate[3]
+            target_time = datetime.fromisoformat(f"{expiry_date}".replace("Z", "+00:00"))
+            if target_time <= one_month_later:
+                LOG.info(f"Start renewing certificate {certificate_domain}")
+                renew_certificate(certificate[2].replace('/cert.pem', '/certificate.json'))
+                run_renew_command_as_subprocess_command(renew_command)
+            else:
+                LOG.info(f"Target certificate {certificate_domain} is more than 30days")
+        else:
+            LOG.warning("Force renewing certificates")
+            renew_certificate(certificate[2].replace('/cert.pem', '/certificate.json'))
+            run_renew_command_as_subprocess_command(renew_command)
 
 @main_command.command(name='new', help='Get new certificate')
 @click.option('--domain', help='domain name for example *.example.com', multiple=True, required=True)
@@ -92,7 +113,6 @@ def certificate_new(domain, provider, access_token, email, renew_command):
             pass
 
     get_certificate_for_domains_dns(domain, provider, email, access_token, renew_command)
-
 
 if __name__ == '__main__':
     main_command()
