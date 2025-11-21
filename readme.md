@@ -1,5 +1,5 @@
 _## PYACME
-
+# language=python
 #### You can get certificate from using cloudflare webhook, arvancloud webhooks, acme dns cname, raw txt
 
 ### Help

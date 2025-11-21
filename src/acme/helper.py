@@ -21,8 +21,8 @@ from src.webhooks.cloudflare import Cloudflare
 from src.happylog import LOG
 
 PYACME_HOME_PATH = os.path.expanduser("~/.pyacme")
-DIRECTORY_ADDRESS = "https://acme-staging-v02.api.letsencrypt.org/directory"
-
+#DIRECTORY_ADDRESS = "https://acme-staging-v02.api.letsencrypt.org/directory"
+DIRECTORY_ADDRESS = 'https://acme-v02.api.letsencrypt.org/directory'
 
 def create_acme_account(email: str, domain: str):
     session = requests.Session()
