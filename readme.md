@@ -4,7 +4,7 @@ _## PYACME
 
 ### Help
 
-    python app.py --help                                                                                                                                                                                         ─╯
+    python -m pyacmecli.__main__ --help                                                                                                                                                                                         ─╯
     Usage: app.py [OPTIONS] COMMAND [ARGS]...
     
     Options:
@@ -20,17 +20,28 @@ _## PYACME
 ### How I can get certificate
 
 ```bash
-python app.py new --domain mydomain.ir --domain '*.mydomain.ir' --provider cloudflare --email mygmail@gmail.com --access-token 'cloudflare-access-token' --renew-command 'docker restart mycontainer_name'
+ python -m pyacmecli.__main__ new --domain mydomain.ir --domain '*.mydomain.ir' --provider cloudflare --email mygmail@gmail.com --access-token 'cloudflare-access-token' --renew-command 'docker restart mycontainer_name'
 ```
 
 ### List of certificate
 
 ```bash
-python app.py list
+ python -m pyacmecli.__main__ list
 ```
 
 ### Cron to renew certificates
 
 ```
 # will develop it
+```
+
+### build project 
+```shell
+# rebuild your wheel
+python -m build
+# install it 
+pip install dist/pyacmecli-0.1.0-py3-none-any.whl 
+
+#upload project to pypi
+twine upload dist/*
 ```

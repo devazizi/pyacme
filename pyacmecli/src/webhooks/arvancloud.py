@@ -1,9 +1,9 @@
 import time
 
 import requests
-from pyacme.src.happylog import LOG
-from pyacme.src.webhooks.func_helper import get_root_domain
-from pyacme.src.webhooks.base import Base
+from pyacmecli.src.happylog import LOG
+from pyacmecli.src.webhooks.func_helper import get_root_domain
+from pyacmecli.src.webhooks.base import Base
 
 
 class ArvanCloud(Base):
