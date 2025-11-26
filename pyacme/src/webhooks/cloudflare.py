@@ -1,8 +1,8 @@
 import time
 
 import requests
-from src.happylog import LOG
-from src.webhooks.func_helper import get_root_domain
+from pyacme.src.happylog import LOG
+from pyacme.src.webhooks.func_helper import get_root_domain
 
 
 class Cloudflare:

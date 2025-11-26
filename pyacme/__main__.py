@@ -1,12 +1,12 @@
 ﻿import subprocess
 import os
 import click
-from src.acme.helper import init_dir, get_certificate_for_domains_dns, PYACME_HOME_PATH, renew_certificate
+from pyacme.src.acme.helper import init_dir, get_certificate_for_domains_dns, PYACME_HOME_PATH, renew_certificate
 from validators import domain as domain_validator
 from tabulate import tabulate
-from src.common.certificates import get_certificate_list
+from pyacme.src.common.certificates import get_certificate_list
 from datetime import datetime, timezone, timedelta
-from src.happylog import LOG
+from pyacme.src.happylog import LOG
 
 SUPPORTABLE_PROVIDER = ('arvancloud', 'cloudflare', 'acmedns', 'dns')
 
@@ -114,5 +114,5 @@ def certificate_new(domain, provider, access_token, email, renew_command):
 
     get_certificate_for_domains_dns(domain, provider, email, access_token, renew_command)
 
-if __name__ == '__main__':
-    main_command()
+
+main_command()

@@ -1,9 +1,5 @@
-import json
-import time
-
 import requests
-from src.happylog import LOG
-from src.webhooks.func_helper import get_root_domain
+from pyacme.src.happylog import LOG
 from .base import Base
 
 
