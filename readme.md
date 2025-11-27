@@ -49,6 +49,9 @@ cd pyacmecli
 virtualenv .venv
 pip install pyacmecli
 ( source .venv/bin/activate && python -m pyacmecli.__main__ cron --force-renewal)
+( source .venv/bin/activate && pyacmecli cron)
+# example cron job
+0 2 * * * ( source /apps/pyacmecli/.venv/bin/activate && pyacmecli cron )
 ```
 
 ### build and publish project
