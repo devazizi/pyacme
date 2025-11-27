@@ -19,8 +19,9 @@ from pyacmecli.src.webhooks.cloudflare import Cloudflare
 from pyacmecli.src.happylog import LOG
 
 PYACME_HOME_PATH = os.path.expanduser("~/.pyacme")
-#DIRECTORY_ADDRESS = "https://acme-staging-v02.api.letsencrypt.org/directory"
-DIRECTORY_ADDRESS = 'https://acme-v02.api.letsencrypt.org/directory'
+# DIRECTORY_ADDRESS = "https://acme-staging-v02.api.letsencrypt.org/directory"
+DIRECTORY_ADDRESS = "https://acme-v02.api.letsencrypt.org/directory"
+
 
 def create_acme_account(email: str, domain: str):
     session = requests.Session()
@@ -33,12 +34,11 @@ def create_acme_account(email: str, domain: str):
     new_nonce_url = directory["newNonce"]
     new_account_url = directory.get("newAccount")
 
-    account_payload = {
-        "termsOfServiceAgreed": True,
-        "contact": [f"mailto:{email}"]
-    }
+    account_payload = {"termsOfServiceAgreed": True, "contact": [f"mailto:{email}"]}
 
-    resp = post_jws(session, new_account_url, account_payload, privkey, new_nonce_url, jwk=jwk)
+    resp = post_jws(
+        session, new_account_url, account_payload, privkey, new_nonce_url, jwk=jwk
+    )
     acct_url = resp.headers.get("Location")
     if not acct_url:
         raise RuntimeError(f"Failed to create account for {domain}: {resp.text}")
@@ -78,9 +78,13 @@ def load_or_make_rsa_key(file_name: str | None = None, bits: int = 2048):
 
     if os.path.exists(path):
         with open(path, "rb") as f:
-            return serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
+            return serialization.load_pem_private_key(
+                f.read(), password=None, backend=default_backend()
+            )
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=bits, backend=default_backend())
+    key = rsa.generate_private_key(
+        public_exponent=65537, key_size=bits, backend=default_backend()
+    )
     pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.TraditionalOpenSSL,
@@ -129,10 +133,16 @@ def make_jws(privkey, payload_obj, url, nonce, jwk=None, kid=None):
     protected64 = b64u(protected_b)
     signing_input = (protected64 + "." + payload64).encode("ascii")
     signature = privkey.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
-    return {"protected": protected64, "payload": payload64, "signature": b64u(signature)}
+    return {
+        "protected": protected64,
+        "payload": payload64,
+        "signature": b64u(signature),
+    }
 
 
-def post_jws(session, url, payload_obj, privkey, new_nonce_url, jwk=None, kid=None, max_retries=5):
+def post_jws(
+    session, url, payload_obj, privkey, new_nonce_url, jwk=None, kid=None, max_retries=5
+):
     for attempt in range(max_retries):
         nonce = get_nonce(session, new_nonce_url)
 
@@ -155,7 +165,11 @@ def post_jws(session, url, payload_obj, privkey, new_nonce_url, jwk=None, kid=No
         signing_input = (protected64 + "." + payload64).encode("ascii")
         signature = privkey.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
 
-        jws = {"protected": protected64, "payload": payload64, "signature": b64u(signature)}
+        jws = {
+            "protected": protected64,
+            "payload": payload64,
+            "signature": b64u(signature),
+        }
 
         headers = {"Content-Type": "application/jose+json"}
         r = session.post(url, json=jws, headers=headers, timeout=30)
@@ -168,14 +182,19 @@ def post_jws(session, url, payload_obj, privkey, new_nonce_url, jwk=None, kid=No
         except Exception:
             body = {}
 
-        if body.get("type") == "urn:ietf:params:acme:error:badNonce" or r.status_code == 400:
+        if (
+            body.get("type") == "urn:ietf:params:acme:error:badNonce"
+            or r.status_code == 400
+        ):
             time.sleep(0.5)
             continue
 
         LOG.error(f"DEBUG JWS failed: {r.status_code} {r.text}")
         r.raise_for_status()
 
-    raise RuntimeError(f"Failed after retries; last status: {r.status_code}, body: {getattr(r, 'text', '<no body>')}")
+    raise RuntimeError(
+        f"Failed after retries; last status: {r.status_code}, body: {getattr(r, 'text', '<no body>')}"
+    )
 
 
 def account_directory_url(domain: str) -> str:
@@ -185,7 +204,9 @@ def account_directory_url(domain: str) -> str:
     """
     path = os.path.expanduser(f"~/.pyacme/{domain}/account_url.result")
     if not os.path.exists(path):
-        raise RuntimeError(f"ACME account URL file for '{domain}' not found. You must create an account first.")
+        raise RuntimeError(
+            f"ACME account URL file for '{domain}' not found. You must create an account first."
+        )
     with open(path, "r") as f:
         acct_url = f.read().strip()
     return acct_url
@@ -213,22 +234,32 @@ def thumbprint(jwk):
     return b64u(hashlib.sha256(jwk_json.encode("utf8")).digest())
 
 
-def dns_challenge_provider(provider_name: str, domain: str, access_token: str | None = None):
-    cfg_dir = f'{PYACME_HOME_PATH}/{domain}'
-    if provider_name == 'cloudflare':
+def dns_challenge_provider(
+    provider_name: str, domain: str, access_token: str | None = None
+):
+    cfg_dir = f"{PYACME_HOME_PATH}/{domain}"
+    if provider_name == "cloudflare":
         return Cloudflare(domain, access_token)
-    elif provider_name == 'dns':
+    elif provider_name == "dns":
         return None
-    elif provider_name == 'arvancloud':
+    elif provider_name == "arvancloud":
         return ArvanCloud(domain, access_token)
-    elif provider_name == 'acmedns':
+    elif provider_name == "acmedns":
         return AcmeDNS(domain, cfg_dir)
     else:
-        raise RuntimeError('Invalid provider')
+        raise RuntimeError("Invalid provider")
 
 
-def perform_dns_challenge(session, privkey, account_url, new_nonce_url, authz_url, jwk, provider_name,
-                          access_token: str | None = None):
+def perform_dns_challenge(
+    session,
+    privkey,
+    account_url,
+    new_nonce_url,
+    authz_url,
+    jwk,
+    provider_name,
+    access_token: str | None = None,
+):
     # Step 1: GET authz details
     resp = session.get(authz_url, timeout=10)
     resp.raise_for_status()
@@ -254,12 +285,16 @@ def perform_dns_challenge(session, privkey, account_url, new_nonce_url, authz_ur
     if dns_provider:
         dns_provider.delete_txt_record()
         dns_provider.add_txt_record(name=record_name, content=txt_value)
-        LOG.info("You dont choose any dns provider you should add txt record in your dns server")
+        LOG.info(
+            "You dont choose any dns provider you should add txt record in your dns server"
+        )
         LOG.info(f"DNS-01 challenge found for {domain}")
         LOG.info(f"TXT record name: {record_name}")
         LOG.info(f"TXT record value: {txt_value}")
     else:
-        LOG.info("You dont choose any dns provider you should add txt record in your dns server")
+        LOG.info(
+            "You dont choose any dns provider you should add txt record in your dns server"
+        )
         LOG.info(f"DNS-01 challenge found for {domain}")
         LOG.info(f"TXT record name: {record_name}")
         LOG.info(f"TXT record value: {txt_value}")
@@ -294,15 +329,23 @@ def wait_for_dns(record_name, txt_value, interval=10):
                 if txt_value in txt_records:
                     LOG.info("DNS record found.")
                     return
-            LOG.info(f"TXT record found, but value not matching. Retrying...")
-        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers) as e:
+            LOG.info("TXT record found, but value not matching. Retrying...")
+        except (
+            dns.resolver.NXDOMAIN,
+            dns.resolver.NoAnswer,
+            dns.resolver.NoNameservers,
+        ) as e:
             LOG.warning(f"DNS query failed or no answer yet: {e}")
 
         time.sleep(interval)
 
 
-def finalize_order(session, privkey, account_url, new_nonce_url, order_data, domains, order_url):
-    cert_privkey = load_or_make_rsa_key(file_name=f"{domains[0]}/privkey.pem", bits=2048)
+def finalize_order(
+    session, privkey, account_url, new_nonce_url, order_data, domains, order_url
+):
+    cert_privkey = load_or_make_rsa_key(
+        file_name=f"{domains[0]}/privkey.pem", bits=2048
+    )
 
     csr = create_csr(cert_privkey, domains)
     csr64 = b64u(csr)
@@ -310,7 +353,9 @@ def finalize_order(session, privkey, account_url, new_nonce_url, order_data, dom
     finalize_payload = {"csr": csr64}
     finalize_url = order_data["finalize"]
 
-    resp = post_jws(session, finalize_url, finalize_payload, privkey, new_nonce_url, kid=account_url)
+    resp = post_jws(
+        session, finalize_url, finalize_payload, privkey, new_nonce_url, kid=account_url
+    )
     resp.raise_for_status()
 
     if not order_url:
@@ -318,7 +363,9 @@ def finalize_order(session, privkey, account_url, new_nonce_url, order_data, dom
 
     while True:
         time.sleep(2)
-        resp = post_jws(session, order_url, None, privkey, new_nonce_url, kid=account_url)
+        resp = post_jws(
+            session, order_url, None, privkey, new_nonce_url, kid=account_url
+        )
         status = resp.json()["status"]
         LOG.info(f"Order status: {status}")
         if status == "valid":
@@ -343,8 +390,13 @@ def finalize_order(session, privkey, account_url, new_nonce_url, order_data, dom
     LOG.info(f"Certificate private key saved: {domains[0]}/privkey.pem")
 
 
-def get_certificate_for_domains_dns(domains: list[str], dns_provider: str, email: str, access_token: str,
-                                    renew_command: str):
+def get_certificate_for_domains_dns(
+    domains: list[str],
+    dns_provider: str,
+    email: str,
+    access_token: str,
+    renew_command: str,
+):
     create_acme_account(domain=domains[0], email=email)
     LOG.info(f"Starting certificate request for domains: {domains}")
 
@@ -357,7 +409,14 @@ def get_certificate_for_domains_dns(domains: list[str], dns_provider: str, email
     account_url = account_directory_url(domains[0])
 
     order_payload = {"identifiers": [{"type": "dns", "value": d} for d in domains]}
-    resp = post_jws(session, directory["newOrder"], order_payload, privkey, new_nonce_url, kid=account_url)
+    resp = post_jws(
+        session,
+        directory["newOrder"],
+        order_payload,
+        privkey,
+        new_nonce_url,
+        kid=account_url,
+    )
     order_data = resp.json()
     order_url = resp.headers.get("Location")
 
@@ -368,10 +427,20 @@ def get_certificate_for_domains_dns(domains: list[str], dns_provider: str, email
     LOG.info(f"Order data: {order_data}")
 
     for authz_url in order_data["authorizations"]:
-        perform_dns_challenge(session, privkey, account_url, new_nonce_url, authz_url, jwk, dns_provider,
-                              access_token=access_token)
+        perform_dns_challenge(
+            session,
+            privkey,
+            account_url,
+            new_nonce_url,
+            authz_url,
+            jwk,
+            dns_provider,
+            access_token=access_token,
+        )
 
-    finalize_order(session, privkey, account_url, new_nonce_url, order_data, domains, order_url)
+    finalize_order(
+        session, privkey, account_url, new_nonce_url, order_data, domains, order_url
+    )
 
     cert = SSLCertificate.from_pem(
         cert_path=f"{PYACME_HOME_PATH}/{domains[0]}/cert.pem",
@@ -380,10 +449,11 @@ def get_certificate_for_domains_dns(domains: list[str], dns_provider: str, email
         renew_command=renew_command,
         provider=dns_provider,
         provider_conf=access_token,
-        email=email
+        email=email,
     )
 
     cert.save(f"{PYACME_HOME_PATH}/{domains[0]}/certificate.json")
+
 
 def renew_certificate(cert_json_path: str):
     if not os.path.exists(cert_json_path):
@@ -392,7 +462,7 @@ def renew_certificate(cert_json_path: str):
     with open(cert_json_path, "r") as f:
         cert_data = json.load(f)
 
-    domain = cert_data['domain'].replace('*.', '')
+    domain = cert_data["domain"].replace("*.", "")
     dns_provider = cert_data["provider"]
     access_token = cert_data.get("provider_conf")
 
@@ -404,9 +474,18 @@ def renew_certificate(cert_json_path: str):
     jwk = jwk_from_privkey(privkey)
     account_url = account_directory_url(domain)
 
-
-    identifiers = [{"type": "dns", "value": cert_data["domain"]}, {"type": "dns", "value": domain}]
-    resp = post_jws(session, directory["newOrder"], {"identifiers": identifiers}, privkey, new_nonce_url, kid=account_url)
+    identifiers = [
+        {"type": "dns", "value": cert_data["domain"]},
+        {"type": "dns", "value": domain},
+    ]
+    resp = post_jws(
+        session,
+        directory["newOrder"],
+        {"identifiers": identifiers},
+        privkey,
+        new_nonce_url,
+        kid=account_url,
+    )
     order_data = resp.json()
     order_url = resp.headers.get("Location")
     if not order_url:
@@ -421,21 +500,31 @@ def renew_certificate(cert_json_path: str):
             authz_url=authz_url,
             jwk=jwk,
             provider_name=dns_provider,
-            access_token=access_token
+            access_token=access_token,
         )
 
-    finalize_order(session, privkey, account_url, new_nonce_url, order_data, [domain, cert_data["domain"]], order_url)
+    finalize_order(
+        session,
+        privkey,
+        account_url,
+        new_nonce_url,
+        order_data,
+        [domain, cert_data["domain"]],
+        order_url,
+    )
 
     cert_path = os.path.join(PYACME_HOME_PATH, domain, "cert.pem")
 
     with open(cert_path, "rb") as f:
         cert_obj = x509.load_pem_x509_certificate(f.read(), default_backend())
     new_expiry_date = cert_obj.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    cert_data.update({
-        "expiry_date": new_expiry_date,
-        "last_renewed": datetime.datetime.utcnow().isoformat() + "Z",
-        "status": "valid",
-    })
+    cert_data.update(
+        {
+            "expiry_date": new_expiry_date,
+            "last_renewed": datetime.datetime.utcnow().isoformat() + "Z",
+            "status": "valid",
+        }
+    )
 
     with open(cert_json_path, "w") as f:
         json.dump(cert_data, f, indent=4)

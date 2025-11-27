@@ -1,6 +1,7 @@
 import json
 import os
 
+
 def get_certificate_list(base_dir):
     certificates = []
     id = 0
@@ -10,15 +11,17 @@ def get_certificate_list(base_dir):
             try:
                 with open(cert_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    certificates.append([
-                        id,
-                        data.get('domain'),
-                        data.get('certificate_path'),
-                        data.get('expiry_date'),
-                        data.get('status'),
-                        data.get('renew_command'),
-                        data.get('last_renewed'),
-                    ])
+                    certificates.append(
+                        [
+                            id,
+                            data.get("domain"),
+                            data.get("certificate_path"),
+                            data.get("expiry_date"),
+                            data.get("status"),
+                            data.get("renew_command"),
+                            data.get("last_renewed"),
+                        ]
+                    )
                     id += 1
             except json.JSONDecodeError as err:
                 raise err

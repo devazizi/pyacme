@@ -11,10 +11,12 @@ class Cloudflare:
         self.domain = domain
         self.headers = {
             "Authorization": f"Bearer {self.api_token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         zone_id = self.__get_zone_id(domain)
-        self.base_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
+        self.base_url = (
+            f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
+        )
 
     def __get_zone_id(self, domain: str) -> str:
         url = "https://api.cloudflare.com/client/v4/zones"
@@ -29,16 +31,13 @@ class Cloudflare:
         raise Exception(f"Zone ID not found for domain: {domain}")
 
     def add_txt_record(self, name: str, content: str, ttl: int = 120) -> dict:
-        payload = {
-            "type": "TXT",
-            "name": name,
-            "content": content,
-            "ttl": ttl
-        }
+        payload = {"type": "TXT", "name": name, "content": content, "ttl": ttl}
 
         response = requests.post(self.base_url, headers=self.headers, json=payload)
         # response.raise_for_status()
-        LOG.debug(f'Status add TXT record is {response.status_code} response is {response.json()}')
+        LOG.debug(
+            f"Status add TXT record is {response.status_code} response is {response.json()}"
+        )
 
     def delete_txt_record(self) -> dict:
         resp = requests.get(self.base_url, headers=self.headers)
@@ -46,7 +45,10 @@ class Cloudflare:
 
         records = resp.json().get("result", [])
         for record in records:
-            if f'_acme-challenge.{self.domain.replace(f'.{get_root_domain(self.domain)}', '')}' in record.get("name"):
+            if (
+                f"_acme-challenge.{self.domain.replace(f'.{get_root_domain(self.domain)}', '')}"
+                in record.get("name")
+            ):
                 record_id = record.get("id")
                 delete_url = f"{self.base_url}/{record_id}"
                 del_resp = requests.delete(delete_url, headers=self.headers)

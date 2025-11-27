@@ -16,29 +16,31 @@ class ArvanCloud(Base):
     def __get_headers(self):
         return {
             "Authorization": f"{self.api_token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
     def add_txt_record(self, name: str, content: str, ttl: int = 120) -> dict:
         payload = {
-            "value": {
-                "text": content
-            },
+            "value": {"text": content},
             "type": "txt",
-            "name": name.replace(get_root_domain(self.domain), '', 1),
+            "name": name.replace(get_root_domain(self.domain), "", 1),
             "ttl": ttl,
             "cloud": False,
             "upstream_https": "default",
             "ip_filter_mode": {
                 "count": "single",
                 "order": "none",
-                "geo_filter": "none"
-            }
+                "geo_filter": "none",
+            },
         }
 
-        response = requests.post(self.base_url, headers=self.__get_headers(), json=payload)
+        response = requests.post(
+            self.base_url, headers=self.__get_headers(), json=payload
+        )
         response.raise_for_status()
-        LOG.debug(f'Status add TXT record is {response.status_code} response is {response.json()}')
+        LOG.debug(
+            f"Status add TXT record is {response.status_code} response is {response.json()}"
+        )
 
     def delete_txt_record(self) -> dict:
         """
@@ -54,7 +56,10 @@ class ArvanCloud(Base):
 
         records = resp.json().get("data", [])
         for record in records:
-            if f'_acme-challenge.{self.domain.replace(f'.{get_root_domain(self.domain)}', '')}' in record.get("name"):
+            if (
+                f"_acme-challenge.{self.domain.replace(f'.{get_root_domain(self.domain)}', '')}"
+                in record.get("name")
+            ):
                 record_id = record.get("id")
                 delete_url = f"{self.base_url}/{record_id}"
                 del_resp = requests.delete(delete_url, headers=self.__get_headers())

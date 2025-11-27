@@ -11,18 +11,18 @@ from pyacmecli.src.happylog import LOG
 
 class SSLCertificate:
     def __init__(
-            self,
-            domain: str,
-            certificate_path: str,
-            private_key_path: str,
-            expiry_date: str,
-            renew_before_days: int,
-            last_renewed: str,
-            renew_command: str,
-            status: str,
-            provider: str,
-            provider_conf: str,
-            email: str
+        self,
+        domain: str,
+        certificate_path: str,
+        private_key_path: str,
+        expiry_date: str,
+        renew_before_days: int,
+        last_renewed: str,
+        renew_command: str,
+        status: str,
+        provider: str,
+        provider_conf: str,
+        email: str,
     ):
         self.domain = domain
         self.certificate_path = certificate_path
@@ -31,7 +31,7 @@ class SSLCertificate:
         self.renew_before_days = renew_before_days
         self.last_renewed = datetime.fromisoformat(last_renewed.replace("Z", "+00:00"))
         self.renew_command = renew_command
-        self.status = status,
+        self.status = (status,)
         self.provider = provider
         self.provider_conf = provider_conf
         self.email = email
@@ -53,10 +53,10 @@ class SSLCertificate:
             "renew_before_days": self.renew_before_days,
             "last_renewed": self.last_renewed.isoformat().replace("+00:00", "Z"),
             "renew_command": self.renew_command,
-            "status": ''.join(self.status),
+            "status": "".join(self.status),
             "provider": self.provider,
             "provider_conf": self.provider_conf,
-            "email": self.email
+            "email": self.email,
         }
         if file_path is None:
             raise ValueError("File path must be provided to save.")
@@ -79,8 +79,16 @@ class SSLCertificate:
         )
 
     @classmethod
-    def from_pem(cls, cert_path: str, key_path: str, provider: str, provider_conf: str, renew_before_days: int = 30,
-                 renew_command: str = "", email: str = '') -> "SSLCertificate":
+    def from_pem(
+        cls,
+        cert_path: str,
+        key_path: str,
+        provider: str,
+        provider_conf: str,
+        renew_before_days: int = 30,
+        renew_command: str = "",
+        email: str = "",
+    ) -> "SSLCertificate":
         """Read SSL certificate from PEM file and create an SSLCertificate instance."""
         with open(cert_path, "rb") as f:
             cert_data = f.read()
@@ -88,11 +96,15 @@ class SSLCertificate:
 
         # Extract domain from CN or SAN
         try:
-            common_name = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
+            common_name = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[
+                0
+            ].value
         except IndexError:
             common_name = ""
         try:
-            san = cert.extensions.get_extension_for_oid(x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
+            san = cert.extensions.get_extension_for_oid(
+                x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+            )
             domains = san.value.get_values_for_type(x509.DNSName)
             domain = domains[0] if domains else common_name
         except x509.ExtensionNotFound:
@@ -100,7 +112,11 @@ class SSLCertificate:
 
         # Use UTC-aware datetime
         expiry_date = cert.not_valid_after_utc.isoformat().replace("+00:00", "Z")
-        status = "valid" if datetime.now(timezone.utc) < cert.not_valid_after_utc else "expired"
+        status = (
+            "valid"
+            if datetime.now(timezone.utc) < cert.not_valid_after_utc
+            else "expired"
+        )
         last_renewed = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         obj = cls(
@@ -114,7 +130,7 @@ class SSLCertificate:
             status=status,
             provider=provider,
             provider_conf=provider_conf,
-            email=email
+            email=email,
         )
 
         # Optional: verify private key matches
@@ -132,9 +148,7 @@ class SSLCertificate:
                 key_data = f.read()
 
             private_key = serialization.load_pem_private_key(
-                key_data,
-                password=None,
-                backend=default_backend()
+                key_data, password=None, backend=default_backend()
             )
 
             with open(self.certificate_path, "rb") as f:
@@ -143,12 +157,22 @@ class SSLCertificate:
             pub_key = cert.public_key()
 
             # RSA keys
-            if isinstance(private_key, rsa.RSAPrivateKey) and isinstance(pub_key, rsa.RSAPublicKey):
-                return private_key.public_key().public_numbers() == pub_key.public_numbers()
+            if isinstance(private_key, rsa.RSAPrivateKey) and isinstance(
+                pub_key, rsa.RSAPublicKey
+            ):
+                return (
+                    private_key.public_key().public_numbers()
+                    == pub_key.public_numbers()
+                )
 
             # EC keys
-            if isinstance(private_key, ec.EllipticCurvePrivateKey) and isinstance(pub_key, ec.EllipticCurvePublicKey):
-                return private_key.public_key().public_numbers() == pub_key.public_numbers()
+            if isinstance(private_key, ec.EllipticCurvePrivateKey) and isinstance(
+                pub_key, ec.EllipticCurvePublicKey
+            ):
+                return (
+                    private_key.public_key().public_numbers()
+                    == pub_key.public_numbers()
+                )
 
             return False
         except Exception as e:
