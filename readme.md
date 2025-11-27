@@ -51,7 +51,13 @@ pip install pyacmecli
 ( source .venv/bin/activate && python -m pyacmecli.__main__ cron --force-renewal)
 ```
 
-### build project 
+### build and publish project
+```shell
+uv build
+uv publish
+```
+
+### build project (legacy)
 ```shell
 # rebuild your wheel
 python -m build

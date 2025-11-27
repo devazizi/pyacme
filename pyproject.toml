@@ -3,8 +3,8 @@ requires = ["setuptools>=70.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = ""
-version = "0.0.1"
+name = "pyacmecli"
+version = "0.1.2"
 dependencies = [
     "build==1.3.0",
     "certifi==2025.10.5",
