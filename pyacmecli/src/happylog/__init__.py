@@ -1,8 +1,9 @@
 import logging
 import sys
 
-formatter = logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s',
-                              datefmt='%Y-%m-%d %H:%M:%S')
+formatter = logging.Formatter(
+    fmt="%(asctime)s %(levelname)-8s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+)
 
 
 class ColorFormatter(logging.Formatter):
@@ -23,8 +24,9 @@ class ColorFormatter(logging.Formatter):
 
 
 def setup_custom_logger(name):
-    formatter = ColorFormatter(fmt='%(asctime)s %(levelname)-8s %(message)s',
-                               datefmt='%Y-%m-%d %H:%M:%S')
+    formatter = ColorFormatter(
+        fmt="%(asctime)s %(levelname)-8s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
 
     screen_handler = logging.StreamHandler(stream=sys.stdout)
     screen_handler.setFormatter(formatter)
@@ -40,7 +42,7 @@ def setup_custom_logger(name):
     return logger
 
 
-LOG = setup_custom_logger('PYACME')
+LOG = setup_custom_logger("PYACME")
 
 
 __init__ = [LOG]
