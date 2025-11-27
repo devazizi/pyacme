@@ -42,6 +42,15 @@ pyacmecli cron
 pyacmecli cron --force-renewal # forcly renew all certificates
 ```
 
+### how to use it in production env
+```shell
+mkdir pyacmecli
+cd pyacmecli
+virtualenv .venv
+pip install pyacmecli
+( source .venv/bin/activate && python -m pyacmecli.__main__ cron --force-renewal)
+```
+
 ### build project 
 ```shell
 # rebuild your wheel
