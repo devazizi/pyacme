@@ -1,6 +1,11 @@
-_## PYACME
-# language=python
-#### You can get certificate from using cloudflare webhook, arvancloud webhooks, acme dns cname, raw txt
+## PYACME
+
+#### You can get certificate from using cloudflare webhook, arvancloud webhooks, acme dns cname, raw txt records 
+
+##### installing it using pip
+```sql
+pip install pyacmecli
+```
 
 ### Help
 
@@ -20,19 +25,21 @@ _## PYACME
 ### How I can get certificate
 
 ```bash
- python -m pyacmecli.__main__ new --domain mydomain.ir --domain '*.mydomain.ir' --provider cloudflare --email mygmail@gmail.com --access-token 'cloudflare-access-token' --renew-command 'docker restart mycontainer_name'
+ pyacmecli new --domain mydomain.ir --domain '*.mydomain.ir' --provider cloudflare --email mygmail@gmail.com --access-token 'cloudflare-access-token' --renew-command 'docker restart mycontainer_name'
 ```
 
 ### List of certificate
 
 ```bash
- python -m pyacmecli.__main__ list
+ pyacmecli list
 ```
 
 ### Cron to renew certificates
 
 ```
-# will develop it
+pyacmecli cron
+
+pyacmecli cron --force-renewal # forcly renew all certificates
 ```
 
 ### build project 
