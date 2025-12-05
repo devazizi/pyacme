@@ -3,24 +3,29 @@
 #### You can get certificate from using cloudflare webhook, arvancloud webhooks, acme dns cname, raw txt records 
 
 ##### installing it using pip
-```sql
+```shell
 pip install pyacmecli
 ```
 
 ### Help
 
-    python -m pyacmecli.__main__ --help                                                                                                                                                                                         ─╯
-    Usage: app.py [OPTIONS] COMMAND [ARGS]...
+    Usage: python -m pyacmecli [OPTIONS] COMMAND [ARGS]...
+    
+      PyACME CLIA powerful tools you can get letsencrypt certificates with dns
+      providers (Arvancloud, Cloudflare, AcmeDNS) or get certificate using dns
+      records)To debug application, or watch you can use: pyacmecli --verbose
+      {command}
     
     Options:
-      --help  Show this message and exit.
+      -v, --verbose  Application Log verbosity
+      --help         Show this message and exit.
     
     Commands:
-      cleanup  Remove ~/.pyacme directory and remove everything be careful
-      init     init pyacme script
-      list     List of certificates
-      new      Get new certificate
-      renew    Renew certificate
+      cron  Renew certificate
+      init  init pyacme script
+      list  List of certificates
+      new   Get new certificate
+
 
 ### How I can get certificate
 
@@ -28,30 +33,21 @@ pip install pyacmecli
  pyacmecli new --domain mydomain.ir --domain '*.mydomain.ir' --provider cloudflare --email mygmail@gmail.com --access-token 'cloudflare-access-token' --renew-command 'docker restart mycontainer_name'
 ```
 
-### List of certificate
-
-```bash
- pyacmecli list
-```
-
-### Cron to renew certificates
-
-```
-pyacmecli cron
-
-pyacmecli cron --force-renewal # forcly renew all certificates
-```
-
 ### how to use it in production env
 ```shell
 mkdir pyacmecli
 cd pyacmecli
 virtualenv .venv
+source .venv/bin/active
 pip install pyacmecli
-( source .venv/bin/activate && python -m pyacmecli.__main__ cron --force-renewal)
-( source .venv/bin/activate && pyacmecli cron)
-# example cron job
-0 2 * * * ( source /apps/pyacmecli/.venv/bin/activate && pyacmecli cron )
+/apps/pyacmecli/.venv/bin/pyacmecli init # to init pyacmecli project
+/apps/pyacmecli/.venv/bin/pyacmecli new --domain mydomain.ir --domain '*.mydomain.ir' --provider cloudflare --email mygmail@gmail.com --access-token 'cloudflare-access-token' --renew-command 'docker restart mycontainer_name'
+/apps/pyacmecli/.venv/bin/pyacmecli list # list of certificates
+/apps/pyacmecli/.venv/bin/pyacmecli cron cron --force-renewal # force renewal certificates
+/apps/pyacmecli/.venv/bin/pyacmecli cron
+# example cron job (run every day at 2 AM)
+crontab -e
+0 2 * * * /apps/pyacmecli/.venv/bin/pyacmecli cron
 ```
 
 ### build and publish project
