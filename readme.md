@@ -38,7 +38,7 @@ pip install pyacmecli
 mkdir pyacmecli
 cd pyacmecli
 virtualenv .venv
-source .venv/bin/active
+source .venv/bin/activate
 pip install pyacmecli
 /apps/pyacmecli/.venv/bin/pyacmecli init # to init pyacmecli project
 /apps/pyacmecli/.venv/bin/pyacmecli new --domain mydomain.ir --domain '*.mydomain.ir' --provider cloudflare --email mygmail@gmail.com --access-token 'cloudflare-access-token' --renew-command 'docker restart mycontainer_name'
