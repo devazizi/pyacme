@@ -3,9 +3,9 @@ import time
 import requests
 from pyacmecli.src.happylog import LOG
 from pyacmecli.src.webhooks.func_helper import get_root_domain
+from pyacmecli.src.webhooks.base import Base
 
-
-class Cloudflare:
+class Cloudflare(Base):
     def __init__(self, domain: str, api_token: str):
         self.api_token = api_token
         self.domain = domain
