@@ -36,13 +36,23 @@ def run_renew_command_as_subprocess_command(renew_command):
             LOG.error(f"Renew command failed: {e.stderr.strip()}")
 
 
-@click.group()
-def main_command():
-    pass
+@click.group(help="PyACME CLI"
+                  "A powerful tools you can get letsencrypt certificates with dns providers\n"
+                  "(Arvancloud, Cloudflare, AcmeDNS) or get certificate using dns records)"
+                  "To debug application, or watch you can use: pyacmecli --verbose {command}"
+             )
+@click.option(
+    "--verbose", '-v', is_flag=True, help="Application Log verbosity", default=False
+)
+@click.pass_context
+def main_command(ctx, verbose: bool = False):
+    ctx.ensure_object(dict)
+    ctx.obj["VERBOSE"] = verbose
 
 
 @main_command.command(name="init", help="init pyacme script")
-def init_pyacme_project():
+@click.pass_context
+def init_pyacme_project(ctx):
     init_dir()
 
 
@@ -54,7 +64,8 @@ def init_pyacme_project():
 
 
 @main_command.command(name="list", help="List of certificates")
-def certificate_list():
+@click.pass_context
+def certificate_list(ctx):
     base_dir = os.path.expanduser(PYACME_HOME_PATH)
 
     if not os.path.exists(base_dir):
@@ -78,7 +89,8 @@ def certificate_list():
 
 @main_command.command(name="cron", help="Renew certificate")
 @click.option("--force-renewal", is_flag=True, help="Force renewal certificates")
-def certificate_renew(force_renewal: bool = False):
+@click.pass_context
+def certificate_renew(ctx, force_renewal: bool = False):
     base_dir = os.path.expanduser(PYACME_HOME_PATH)
 
     if not os.path.exists(base_dir):
@@ -121,7 +133,7 @@ def certificate_renew(force_renewal: bool = False):
 @click.option(
     "--provider",
     help="provider name if has special provider to set it dns, acmedns, arvancloud, "
-    "cloudflare",
+         "cloudflare",
     required=True,
 )
 @click.option(
@@ -131,7 +143,8 @@ def certificate_renew(force_renewal: bool = False):
 @click.option(
     "--renew-command", help="Renew commands e.g myapp --reload", required=True
 )
-def certificate_new(domain, provider, access_token, email, renew_command):
+@click.pass_context
+def certificate_new(ctx, domain, provider, access_token, email, renew_command):
     for _domain in domain:
         domain_validator(_domain)
 
