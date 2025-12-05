@@ -51,6 +51,7 @@ dependencies = [
     "urllib3==2.5.0",
     "validators==0.35.0",
 ]
+readme = "readme.md"
 
 [tool.uv]
 package = true
