@@ -46,11 +46,11 @@ def init_pyacme_project():
     init_dir()
 
 
-@main_command.command(
-    name="cleanup", help="Remove ~/.pyacme directory and remove everything be careful"
-)
-def cleanup():
-    pass
+# @main_command.command(
+#     name="cleanup", help="Remove ~/.pyacme directory and remove everything be careful"
+# )
+# def cleanup():
+#     pass
 
 
 @main_command.command(name="list", help="List of certificates")
@@ -121,11 +121,11 @@ def certificate_renew(force_renewal: bool = False):
 @click.option(
     "--provider",
     help="provider name if has special provider to set it dns, acmedns, arvancloud, "
-    "cloudflare, aws",
+    "cloudflare",
     required=True,
 )
 @click.option(
-    "--access-token", help="ArvanCloud or Cloudflare access token", required=True
+    "--access-token", help="ArvanCloud or Cloudflare access token", required=False
 )
 @click.option("--email", help="Email address", required=True)
 @click.option(
@@ -136,13 +136,13 @@ def certificate_new(domain, provider, access_token, email, renew_command):
         domain_validator(_domain)
 
     if provider not in SUPPORTABLE_PROVIDER:
-        raise Exception(f"Invalid provider, valid providers {SUPPORTABLE_PROVIDER}")
+        raise click.ClickException(f"Invalid provider, valid providers {SUPPORTABLE_PROVIDER}")
 
     if provider:
         if provider == ARVANCLOUD and access_token is None:
-            click.UsageError("--access_token required when provider is arvancloud")
+            raise click.ClickException("--access-token required when provider is arvancloud")
         elif provider == CLOUDFLARE and access_token is None:
-            click.UsageError("--access_token required when provider is cloudflare")
+            raise click.ClickException("--access-token required when provider is cloudflare")
         else:
             pass
 
