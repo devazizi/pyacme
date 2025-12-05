@@ -151,4 +151,5 @@ def certificate_new(domain, provider, access_token, email, renew_command):
     )
 
 
-main_command()
+if __name__ == "__main__":
+    main_command()
