@@ -1,5 +1,5 @@
 import requests
-from pyacmecli.src.happylog import LOG
+from pyacmecli.happylog import LOG
 from .base import Base
 
 

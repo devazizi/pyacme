@@ -1,7 +1,7 @@
 import subprocess
 import os
 import click
-from pyacmecli.src.acme.helper import (
+from pyacmecli.acme.helper import (
     init_dir,
     get_certificate_for_domains_dns,
     PYACME_HOME_PATH,
@@ -9,9 +9,9 @@ from pyacmecli.src.acme.helper import (
 )
 from validators import domain as domain_validator
 from tabulate import tabulate
-from pyacmecli.src.common.certificates import get_certificate_list
+from pyacmecli.common.certificates import get_certificate_list
 from datetime import datetime, timezone, timedelta
-from pyacmecli.src.happylog import LOG
+from pyacmecli.happylog import LOG
 
 SUPPORTABLE_PROVIDER = ("arvancloud", "cloudflare", "acmedns", "dns")
 

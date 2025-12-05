@@ -6,7 +6,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
-from pyacmecli.src.happylog import LOG
+from pyacmecli.happylog import LOG
 
 
 class SSLCertificate:
