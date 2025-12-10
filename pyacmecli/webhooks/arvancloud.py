@@ -62,7 +62,9 @@ class ArvanCloud(Base):
             ):
                 record_id = record.get("id")
                 delete_url = f"{self.base_url}/{record_id}"
-                del_resp = requests.delete(delete_url, headers=self.__get_headers())
+                del_resp = requests.delete(
+                    delete_url, headers=self.__get_headers()
+                )
                 del_resp.raise_for_status()
                 LOG.debug(del_resp.json())
                 time.sleep(5)

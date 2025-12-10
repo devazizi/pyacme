@@ -19,13 +19,16 @@ class ColorFormatter(logging.Formatter):
     def format(self, record):
         levelname = record.levelname
         if levelname in self.COLORS:
-            record.levelname = f"{self.COLORS[levelname]}{levelname}{self.RESET}"
+            record.levelname = (
+                f"{self.COLORS[levelname]}{levelname}{self.RESET}"
+            )
         return super().format(record)
 
 
 def setup_custom_logger(name):
     formatter = ColorFormatter(
-        fmt="%(asctime)s %(levelname)-8s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        fmt="%(asctime)s %(levelname)-8s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     screen_handler = logging.StreamHandler(stream=sys.stdout)

@@ -2,6 +2,7 @@ import json
 import os
 from abc import ABC, abstractmethod
 
+
 class Base(ABC):
     cfg_dir: str
 

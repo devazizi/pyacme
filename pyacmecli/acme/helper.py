@@ -34,14 +34,24 @@ def create_acme_account(email: str, domain: str):
     new_nonce_url = directory["newNonce"]
     new_account_url = directory.get("newAccount")
 
-    account_payload = {"termsOfServiceAgreed": True, "contact": [f"mailto:{email}"]}
+    account_payload = {
+        "termsOfServiceAgreed": True,
+        "contact": [f"mailto:{email}"],
+    }
 
     resp = post_jws(
-        session, new_account_url, account_payload, privkey, new_nonce_url, jwk=jwk
+        session,
+        new_account_url,
+        account_payload,
+        privkey,
+        new_nonce_url,
+        jwk=jwk,
     )
     acct_url = resp.headers.get("Location")
     if not acct_url:
-        raise RuntimeError(f"Failed to create account for {domain}: {resp.text}")
+        raise RuntimeError(
+            f"Failed to create account for {domain}: {resp.text}"
+        )
 
     # Save account URL in domain-specific directory
     path = os.path.expanduser(f"~/.pyacme/{domain}/account_url.result")
@@ -141,7 +151,14 @@ def make_jws(privkey, payload_obj, url, nonce, jwk=None, kid=None):
 
 
 def post_jws(
-    session, url, payload_obj, privkey, new_nonce_url, jwk=None, kid=None, max_retries=5
+    session,
+    url,
+    payload_obj,
+    privkey,
+    new_nonce_url,
+    jwk=None,
+    kid=None,
+    max_retries=5,
 ):
     for attempt in range(max_retries):
         nonce = get_nonce(session, new_nonce_url)
@@ -159,11 +176,15 @@ def post_jws(
         else:
             protected["kid"] = kid
 
-        protected_b = json.dumps(protected, separators=(",", ":")).encode("utf8")
+        protected_b = json.dumps(protected, separators=(",", ":")).encode(
+            "utf8"
+        )
         protected64 = b64u(protected_b)
 
         signing_input = (protected64 + "." + payload64).encode("ascii")
-        signature = privkey.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+        signature = privkey.sign(
+            signing_input, padding.PKCS1v15(), hashes.SHA256()
+        )
 
         jws = {
             "protected": protected64,
@@ -215,7 +236,9 @@ def account_directory_url(domain: str) -> str:
 def create_csr(privkey, domains):
     csr = (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domains[0])]))
+        .subject_name(
+            x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domains[0])])
+        )
         .add_extension(
             x509.SubjectAlternativeName([x509.DNSName(d) for d in domains]),
             critical=False,
@@ -303,7 +326,9 @@ def perform_dns_challenge(
     wait_for_dns(record_name, txt_value)
 
     challenge_url = dns_challenge["url"]
-    resp = post_jws(session, challenge_url, {}, privkey, new_nonce_url, kid=account_url)
+    resp = post_jws(
+        session, challenge_url, {}, privkey, new_nonce_url, kid=account_url
+    )
 
     while True:
         time.sleep(2)
@@ -341,7 +366,13 @@ def wait_for_dns(record_name, txt_value, interval=10):
 
 
 def finalize_order(
-    session, privkey, account_url, new_nonce_url, order_data, domains, order_url
+    session,
+    privkey,
+    account_url,
+    new_nonce_url,
+    order_data,
+    domains,
+    order_url,
 ):
     cert_privkey = load_or_make_rsa_key(
         file_name=f"{domains[0]}/privkey.pem", bits=2048
@@ -354,7 +385,12 @@ def finalize_order(
     finalize_url = order_data["finalize"]
 
     resp = post_jws(
-        session, finalize_url, finalize_payload, privkey, new_nonce_url, kid=account_url
+        session,
+        finalize_url,
+        finalize_payload,
+        privkey,
+        new_nonce_url,
+        kid=account_url,
     )
     resp.raise_for_status()
 
@@ -408,7 +444,9 @@ def get_certificate_for_domains_dns(
     jwk = jwk_from_privkey(privkey)
     account_url = account_directory_url(domains[0])
 
-    order_payload = {"identifiers": [{"type": "dns", "value": d} for d in domains]}
+    order_payload = {
+        "identifiers": [{"type": "dns", "value": d} for d in domains]
+    }
     resp = post_jws(
         session,
         directory["newOrder"],
@@ -439,7 +477,13 @@ def get_certificate_for_domains_dns(
         )
 
     finalize_order(
-        session, privkey, account_url, new_nonce_url, order_data, domains, order_url
+        session,
+        privkey,
+        account_url,
+        new_nonce_url,
+        order_data,
+        domains,
+        order_url,
     )
 
     cert = SSLCertificate.from_pem(
@@ -517,7 +561,9 @@ def renew_certificate(cert_json_path: str):
 
     with open(cert_path, "rb") as f:
         cert_obj = x509.load_pem_x509_certificate(f.read(), default_backend())
-    new_expiry_date = cert_obj.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_expiry_date = cert_obj.not_valid_after_utc.strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     cert_data.update(
         {
             "expiry_date": new_expiry_date,

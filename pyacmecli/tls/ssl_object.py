@@ -27,9 +27,13 @@ class SSLCertificate:
         self.domain = domain
         self.certificate_path = certificate_path
         self.private_key_path = private_key_path
-        self.expiry_date = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
+        self.expiry_date = datetime.fromisoformat(
+            expiry_date.replace("Z", "+00:00")
+        )
         self.renew_before_days = renew_before_days
-        self.last_renewed = datetime.fromisoformat(last_renewed.replace("Z", "+00:00"))
+        self.last_renewed = datetime.fromisoformat(
+            last_renewed.replace("Z", "+00:00")
+        )
         self.renew_command = renew_command
         self.status = (status,)
         self.provider = provider
@@ -51,7 +55,9 @@ class SSLCertificate:
             "private_key_path": self.private_key_path,
             "expiry_date": self.expiry_date.isoformat().replace("+00:00", "Z"),
             "renew_before_days": self.renew_before_days,
-            "last_renewed": self.last_renewed.isoformat().replace("+00:00", "Z"),
+            "last_renewed": self.last_renewed.isoformat().replace(
+                "+00:00", "Z"
+            ),
             "renew_command": self.renew_command,
             "status": "".join(self.status),
             "provider": self.provider,
@@ -96,9 +102,9 @@ class SSLCertificate:
 
         # Extract domain from CN or SAN
         try:
-            common_name = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[
-                0
-            ].value
+            common_name = cert.subject.get_attributes_for_oid(
+                x509.NameOID.COMMON_NAME
+            )[0].value
         except IndexError:
             common_name = ""
         try:
@@ -111,13 +117,17 @@ class SSLCertificate:
             domain = common_name
 
         # Use UTC-aware datetime
-        expiry_date = cert.not_valid_after_utc.isoformat().replace("+00:00", "Z")
+        expiry_date = cert.not_valid_after_utc.isoformat().replace(
+            "+00:00", "Z"
+        )
         status = (
             "valid"
             if datetime.now(timezone.utc) < cert.not_valid_after_utc
             else "expired"
         )
-        last_renewed = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        last_renewed = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
 
         obj = cls(
             domain=domain,
@@ -137,7 +147,9 @@ class SSLCertificate:
         if obj.verify_private_key_match():
             LOG.info(f"Certificate and private key match for {domain}")
         else:
-            LOG.info(f"Warning: Certificate and private key do NOT match for {domain}")
+            LOG.info(
+                f"Warning: Certificate and private key do NOT match for {domain}"
+            )
 
         return obj
 
@@ -166,9 +178,9 @@ class SSLCertificate:
                 )
 
             # EC keys
-            if isinstance(private_key, ec.EllipticCurvePrivateKey) and isinstance(
-                pub_key, ec.EllipticCurvePublicKey
-            ):
+            if isinstance(
+                private_key, ec.EllipticCurvePrivateKey
+            ) and isinstance(pub_key, ec.EllipticCurvePublicKey):
                 return (
                     private_key.public_key().public_numbers()
                     == pub_key.public_numbers()

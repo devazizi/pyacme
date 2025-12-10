@@ -5,6 +5,7 @@ from pyacmecli.happylog import LOG
 from pyacmecli.webhooks.func_helper import get_root_domain
 from pyacmecli.webhooks.base import Base
 
+
 class Cloudflare(Base):
     def __init__(self, domain: str, api_token: str):
         self.api_token = api_token
@@ -33,7 +34,9 @@ class Cloudflare(Base):
     def add_txt_record(self, name: str, content: str, ttl: int = 120) -> dict:
         payload = {"type": "TXT", "name": name, "content": content, "ttl": ttl}
 
-        response = requests.post(self.base_url, headers=self.headers, json=payload)
+        response = requests.post(
+            self.base_url, headers=self.headers, json=payload
+        )
         # response.raise_for_status()
         LOG.debug(
             f"Status add TXT record is {response.status_code} response is {response.json()}"

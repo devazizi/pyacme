@@ -36,13 +36,18 @@ def run_renew_command_as_subprocess_command(renew_command):
             LOG.error(f"Renew command failed: {e.stderr.strip()}")
 
 
-@click.group(help="PyACME CLI"
-                  "A powerful tools you can get letsencrypt certificates with dns providers\n"
-                  "(Arvancloud, Cloudflare, AcmeDNS) or get certificate using dns records)"
-                  "To debug application, or watch you can use: pyacmecli --verbose {command}"
-             )
+@click.group(
+    help="PyACME CLI"
+    "A powerful tools you can get letsencrypt certificates with dns providers\n"
+    "(Arvancloud, Cloudflare, AcmeDNS) or get certificate using dns records)"
+    "To debug application, or watch you can use: pyacmecli --verbose {command}"
+)
 @click.option(
-    "--verbose", '-v', is_flag=True, help="Application Log verbosity", default=False
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Application Log verbosity",
+    default=False,
 )
 @click.pass_context
 def main_command(ctx, verbose: bool = False):
@@ -83,12 +88,18 @@ def certificate_list(ctx):
         "Last Renew",
     ]
     print(
-        tabulate(certificates, headers=certificate_table_headers, tablefmt="fancy_grid")
+        tabulate(
+            certificates,
+            headers=certificate_table_headers,
+            tablefmt="fancy_grid",
+        )
     )
 
 
 @main_command.command(name="cron", help="Renew certificate")
-@click.option("--force-renewal", is_flag=True, help="Force renewal certificates")
+@click.option(
+    "--force-renewal", is_flag=True, help="Force renewal certificates"
+)
 @click.pass_context
 def certificate_renew(ctx, force_renewal: bool = False):
     base_dir = os.path.expanduser(PYACME_HOME_PATH)
@@ -116,10 +127,14 @@ def certificate_renew(ctx, force_renewal: bool = False):
                 )
                 run_renew_command_as_subprocess_command(renew_command)
             else:
-                LOG.info(f"Target certificate {certificate_domain} is more than 30days")
+                LOG.info(
+                    f"Target certificate {certificate_domain} is more than 30days"
+                )
         else:
             LOG.warning("Force renewing certificates")
-            renew_certificate(certificate[2].replace("/cert.pem", "/certificate.json"))
+            renew_certificate(
+                certificate[2].replace("/cert.pem", "/certificate.json")
+            )
             run_renew_command_as_subprocess_command(renew_command)
 
 
@@ -133,11 +148,13 @@ def certificate_renew(ctx, force_renewal: bool = False):
 @click.option(
     "--provider",
     help="provider name if has special provider to set it dns, acmedns, arvancloud, "
-         "cloudflare",
+    "cloudflare",
     required=True,
 )
 @click.option(
-    "--access-token", help="ArvanCloud or Cloudflare access token", required=False
+    "--access-token",
+    help="ArvanCloud or Cloudflare access token",
+    required=False,
 )
 @click.option("--email", help="Email address", required=True)
 @click.option(
@@ -149,13 +166,19 @@ def certificate_new(ctx, domain, provider, access_token, email, renew_command):
         domain_validator(_domain)
 
     if provider not in SUPPORTABLE_PROVIDER:
-        raise click.ClickException(f"Invalid provider, valid providers {SUPPORTABLE_PROVIDER}")
+        raise click.ClickException(
+            f"Invalid provider, valid providers {SUPPORTABLE_PROVIDER}"
+        )
 
     if provider:
         if provider == ARVANCLOUD and access_token is None:
-            raise click.ClickException("--access-token required when provider is arvancloud")
+            raise click.ClickException(
+                "--access-token required when provider is arvancloud"
+            )
         elif provider == CLOUDFLARE and access_token is None:
-            raise click.ClickException("--access-token required when provider is cloudflare")
+            raise click.ClickException(
+                "--access-token required when provider is cloudflare"
+            )
         else:
             pass
 
