@@ -1,25 +1,38 @@
-import subprocess
+"""CLI entrypoint for pyacme - ACME/Let's Encrypt certificate management."""
+
 import os
+import subprocess
+from datetime import datetime, timedelta, timezone
+
 import click
+from tabulate import tabulate
+from validators import domain as domain_validator
+
 from pyacmecli.acme.helper import (
-    init_dir,
-    get_certificate_for_domains_dns,
     PYACME_HOME_PATH,
+    get_certificate_for_domains_dns,
+    init_dir,
     renew_certificate,
 )
-from validators import domain as domain_validator
-from tabulate import tabulate
 from pyacmecli.common.certificates import get_certificate_list
-from datetime import datetime, timezone, timedelta
-from pyacmecli.happylog import LOG
+from pyacmecli.happylog import LOG, set_log_level, set_verbosity
 
 SUPPORTABLE_PROVIDER = ("arvancloud", "cloudflare", "acmedns", "dns")
-
 ARVANCLOUD = "arvancloud"
 CLOUDFLARE = "cloudflare"
 
+CERTIFICATE_TABLE_HEADERS = [
+    "ID",
+    "Domain",
+    "Certificate Path",
+    "Expiry Date",
+    "Status",
+    "Renew command",
+    "Last Renew",
+]
 
-def run_renew_command_as_subprocess_command(renew_command):
+
+def run_renew_command_as_subprocess_command(renew_command: str | None) -> None:
     if renew_command and renew_command.strip():
         try:
             LOG.info(f"Running renew command: {renew_command}")
@@ -37,27 +50,44 @@ def run_renew_command_as_subprocess_command(renew_command):
 
 
 @click.group(
-    help="PyACME CLI"
-    "A powerful tools you can get letsencrypt certificates with dns providers\n"
-    "(Arvancloud, Cloudflare, AcmeDNS) or get certificate using dns records)"
-    "To debug application, or watch you can use: pyacmecli --verbose {command}"
+    help=(
+        "PyACME CLI - Get Let's Encrypt certificates with DNS providers "
+        "(Arvancloud, Cloudflare, AcmeDNS) or manual DNS records. "
+        "Use --verbose or --log-level DEBUG for debug output."
+    )
 )
 @click.option(
     "--verbose",
     "-v",
     is_flag=True,
-    help="Application Log verbosity",
+    help="Enable debug log level (same as --log-level DEBUG).",
     default=False,
 )
+@click.option(
+    "--log-level",
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+    ),
+    default=None,
+    help="Set log level explicitly. Overrides --verbose when set.",
+)
 @click.pass_context
-def main_command(ctx, verbose: bool = False):
+def main_command(
+    ctx: click.Context, verbose: bool = False, log_level: str | None = None
+) -> None:
+    """Root CLI group; sets verbosity and log level."""
     ctx.ensure_object(dict)
     ctx.obj["VERBOSE"] = verbose
+    if log_level is not None:
+        set_log_level(log_level)
+    else:
+        set_verbosity(verbose)
 
 
-@main_command.command(name="init", help="init pyacme script")
+@main_command.command(name="init", help="Init pyacme directory structure")
 @click.pass_context
-def init_pyacme_project(ctx):
+def init_pyacme_project(ctx: click.Context) -> None:
+    """Create the pyacme home directory (~/.pyacme)."""
     init_dir()
 
 
@@ -70,7 +100,8 @@ def init_pyacme_project(ctx):
 
 @main_command.command(name="list", help="List of certificates")
 @click.pass_context
-def certificate_list(ctx):
+def certificate_list(ctx: click.Context) -> None:
+    """List all certificates in the pyacme home directory."""
     base_dir = os.path.expanduser(PYACME_HOME_PATH)
 
     if not os.path.exists(base_dir):
@@ -78,21 +109,20 @@ def certificate_list(ctx):
         return
 
     certificates = get_certificate_list(base_dir)
-    certificate_table_headers = [
-        "ID",
-        "Domain",
-        "Certificate Path",
-        "Expiry Date",
-        "Status",
-        "Renew command",
-        "Last Renew",
-    ]
-    print(
-        tabulate(
-            certificates,
-            headers=certificate_table_headers,
-            tablefmt="fancy_grid",
+    rows = [
+        (
+            c.id,
+            c.domain,
+            c.certificate_path,
+            c.expiry_date,
+            c.status,
+            c.renew_command,
+            c.last_renewed,
         )
+        for c in certificates
+    ]
+    click.echo(
+        tabulate(rows, headers=CERTIFICATE_TABLE_HEADERS, tablefmt="fancy_grid")
     )
 
 
@@ -101,7 +131,8 @@ def certificate_list(ctx):
     "--force-renewal", is_flag=True, help="Force renewal certificates"
 )
 @click.pass_context
-def certificate_renew(ctx, force_renewal: bool = False):
+def certificate_renew(ctx: click.Context, force_renewal: bool = False) -> None:
+    """Renew certificates that expire within 30 days, or all if --force-renewal."""
     base_dir = os.path.expanduser(PYACME_HOME_PATH)
 
     if not os.path.exists(base_dir):
@@ -112,30 +143,26 @@ def certificate_renew(ctx, force_renewal: bool = False):
     one_month_later = now + timedelta(days=30)
 
     certificates = get_certificate_list(base_dir)
-    for certificate in certificates:
-        renew_command = certificate[5]
+    for cert in certificates:
+        cert_json_path = cert.certificate_path.replace(
+            "/cert.pem", "/certificate.json"
+        )
         if not force_renewal:
-            certificate_domain = certificate[1]
-            expiry_date = certificate[3]
             target_time = datetime.fromisoformat(
-                f"{expiry_date}".replace("Z", "+00:00")
+                cert.expiry_date.replace("Z", "+00:00")
             )
             if target_time <= one_month_later:
-                LOG.info(f"Start renewing certificate {certificate_domain}")
-                renew_certificate(
-                    certificate[2].replace("/cert.pem", "/certificate.json")
-                )
-                run_renew_command_as_subprocess_command(renew_command)
+                LOG.info(f"Start renewing certificate {cert.domain}")
+                renew_certificate(cert_json_path)
+                run_renew_command_as_subprocess_command(cert.renew_command)
             else:
                 LOG.info(
-                    f"Target certificate {certificate_domain} is more than 30days"
+                    f"Target certificate {cert.domain} is more than 30 days away"
                 )
         else:
             LOG.warning("Force renewing certificates")
-            renew_certificate(
-                certificate[2].replace("/cert.pem", "/certificate.json")
-            )
-            run_renew_command_as_subprocess_command(renew_command)
+            renew_certificate(cert_json_path)
+            run_renew_command_as_subprocess_command(cert.renew_command)
 
 
 @main_command.command(name="new", help="Get new certificate")
@@ -161,7 +188,15 @@ def certificate_renew(ctx, force_renewal: bool = False):
     "--renew-command", help="Renew commands e.g myapp --reload", required=True
 )
 @click.pass_context
-def certificate_new(ctx, domain, provider, access_token, email, renew_command):
+def certificate_new(
+    ctx: click.Context,
+    domain: tuple[str, ...],
+    provider: str,
+    access_token: str | None,
+    email: str,
+    renew_command: str,
+) -> None:
+    """Request a new certificate for the given domain(s) and provider."""
     for _domain in domain:
         domain_validator(_domain)
 
@@ -170,20 +205,17 @@ def certificate_new(ctx, domain, provider, access_token, email, renew_command):
             f"Invalid provider, valid providers {SUPPORTABLE_PROVIDER}"
         )
 
-    if provider:
-        if provider == ARVANCLOUD and access_token is None:
-            raise click.ClickException(
-                "--access-token required when provider is arvancloud"
-            )
-        elif provider == CLOUDFLARE and access_token is None:
-            raise click.ClickException(
-                "--access-token required when provider is cloudflare"
-            )
-        else:
-            pass
+    if provider == ARVANCLOUD and access_token is None:
+        raise click.ClickException(
+            "--access-token required when provider is arvancloud"
+        )
+    if provider == CLOUDFLARE and access_token is None:
+        raise click.ClickException(
+            "--access-token required when provider is cloudflare"
+        )
 
     get_certificate_for_domains_dns(
-        domain, provider, email, access_token, renew_command
+        list(domain), provider, email, access_token, renew_command
     )
 
 

@@ -1,6 +1,9 @@
+"""SSL certificate model and PEM loading for pyacme certificate metadata."""
+
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -47,7 +50,7 @@ class SSLCertificate:
             data = json.load(f)
         return cls(**data)
 
-    def save(self, file_path: Optional[str] = None):
+    def save(self, file_path: Optional[str] = None) -> None:
         """Save certificate data to a JSON file."""
         data = {
             "domain": self.domain,
@@ -78,7 +81,7 @@ class SSLCertificate:
         """Return remaining days until expiry (UTC-safe)."""
         return (self.expiry_date - datetime.now(timezone.utc)).days
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (
             f"<SSLCertificate domain={self.domain}, status={self.status}, "
             f"expires_in={self.days_until_expiry()} days>"
@@ -187,6 +190,6 @@ class SSLCertificate:
                 )
 
             return False
-        except Exception as e:
-            LOG.info(f"Could not verify key match: {e}")
+        except Exception as exc:
+            LOG.warning("Could not verify key match: %s", exc)
             return False
