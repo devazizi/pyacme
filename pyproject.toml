@@ -2,7 +2,6 @@
 requires = ["setuptools>=70.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[project.scripts]
 pyacmecli = "pyacmecli.__main__:main_command"
 
 [project]

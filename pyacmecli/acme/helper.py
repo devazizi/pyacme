@@ -1,29 +1,33 @@
+"""ACME protocol helpers: account creation, JWS, DNS-01 challenge, order finalization."""
+
+import base64
 import hashlib
+import json
 import os
 import time
-import base64
-import json
-import datetime
-import requests
+from datetime import datetime, timezone
+
 import dns.resolver
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
+import requests
 from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509 import NameOID
 
+from pyacmecli.happylog import LOG
 from pyacmecli.tls.ssl_object import SSLCertificate
 from pyacmecli.webhooks.acmedns import AcmeDNS
 from pyacmecli.webhooks.arvancloud import ArvanCloud
+from pyacmecli.webhooks.base import Base
 from pyacmecli.webhooks.cloudflare import Cloudflare
-from pyacmecli.happylog import LOG
 
 PYACME_HOME_PATH = os.path.expanduser("~/.pyacme")
 # DIRECTORY_ADDRESS = "https://acme-staging-v02.api.letsencrypt.org/directory"
 DIRECTORY_ADDRESS = "https://acme-v02.api.letsencrypt.org/directory"
 
 
-def create_acme_account(email: str, domain: str):
+def create_acme_account(email: str, domain: str) -> str:
     session = requests.Session()
 
     # Load or create domain-specific account key
@@ -63,10 +67,8 @@ def create_acme_account(email: str, domain: str):
     return acct_url
 
 
-# -------------------------
-# Helper Functions
-# -------------------------
-def init_dir():
+def init_dir() -> None:
+    """Create the pyacme home directory if it does not exist."""
     os.makedirs(PYACME_HOME_PATH, exist_ok=True)
 
 
@@ -79,7 +81,9 @@ def int_to_b64u(n: int) -> str:
     return b64u(n.to_bytes(length, "big"))
 
 
-def load_or_make_rsa_key(file_name: str | None = None, bits: int = 2048):
+def load_or_make_rsa_key(
+    file_name: str | None = None, bits: int = 2048
+) -> rsa.RSAPrivateKey:
     init_dir()
     path = os.path.join(PYACME_HOME_PATH, file_name or "account.key.pem")
 
@@ -108,19 +112,21 @@ def load_or_make_rsa_key(file_name: str | None = None, bits: int = 2048):
     return key
 
 
-def jwk_from_privkey(privkey):
+def jwk_from_privkey(privkey: rsa.RSAPrivateKey) -> dict[str, str]:
+    """Build a JWK from an RSA private key for ACME requests."""
     pub = privkey.public_key()
     nums = pub.public_numbers()
     return {"kty": "RSA", "n": int_to_b64u(nums.n), "e": int_to_b64u(nums.e)}
 
 
-def get_directory(session: requests.Session, directory_url: str):
+def get_directory(session: requests.Session, directory_url: str) -> dict:
+    """Fetch and return the ACME directory JSON."""
     r = session.get(directory_url, timeout=10)
     r.raise_for_status()
     return r.json()
 
 
-def get_nonce(session: requests.Session, new_nonce_url: str):
+def get_nonce(session: requests.Session, new_nonce_url: str) -> str:
     r = session.head(new_nonce_url, timeout=10)
     nonce = r.headers.get("Replay-Nonce")
     if not nonce:
@@ -200,7 +206,7 @@ def post_jws(
 
         try:
             body = r.json()
-        except Exception:
+        except (ValueError, requests.exceptions.JSONDecodeError):
             body = {}
 
         if (
@@ -233,7 +239,7 @@ def account_directory_url(domain: str) -> str:
     return acct_url
 
 
-def create_csr(privkey, domains):
+def create_csr(privkey: rsa.RSAPrivateKey, domains: list[str]) -> bytes:
     csr = (
         x509.CertificateSigningRequestBuilder()
         .subject_name(
@@ -248,7 +254,7 @@ def create_csr(privkey, domains):
     return csr.public_bytes(serialization.Encoding.DER)
 
 
-def thumbprint(jwk):
+def thumbprint(jwk: dict[str, str]) -> str:
     jwk_json = json.dumps(
         {"e": jwk["e"], "kty": jwk["kty"], "n": jwk["n"]},
         separators=(",", ":"),
@@ -259,7 +265,7 @@ def thumbprint(jwk):
 
 def dns_challenge_provider(
     provider_name: str, domain: str, access_token: str | None = None
-):
+) -> Base | None:
     cfg_dir = f"{PYACME_HOME_PATH}/{domain}"
     if provider_name == "cloudflare":
         return Cloudflare(domain, access_token)
@@ -305,23 +311,21 @@ def perform_dns_challenge(
     record_name = f"_acme-challenge.{domain}"
 
     dns_provider = dns_challenge_provider(provider_name, domain, access_token)
+    LOG.info(f"DNS-01 challenge for {domain}")
+    LOG.info(f"TXT record name: {record_name}")
+    LOG.info(f"TXT record value: {txt_value}")
     if dns_provider:
         dns_provider.delete_txt_record()
         dns_provider.add_txt_record(name=record_name, content=txt_value)
-        LOG.info(
-            "You dont choose any dns provider you should add txt record in your dns server"
-        )
-        LOG.info(f"DNS-01 challenge found for {domain}")
-        LOG.info(f"TXT record name: {record_name}")
-        LOG.info(f"TXT record value: {txt_value}")
+        LOG.info("Using DNS provider; TXT record set.")
     else:
         LOG.info(
-            "You dont choose any dns provider you should add txt record in your dns server"
+            "No DNS provider selected. Add the TXT record manually to your "
+            "DNS zone, then continue."
         )
-        LOG.info(f"DNS-01 challenge found for {domain}")
-        LOG.info(f"TXT record name: {record_name}")
-        LOG.info(f"TXT record value: {txt_value}")
-        input("Are you add it to you zones? ")
+        input(
+            "Have you added the TXT record to your zone? Press Enter to continue. "
+        )
 
     wait_for_dns(record_name, txt_value)
 
@@ -340,7 +344,7 @@ def perform_dns_challenge(
             LOG.warning("Already Invalid try to validate again")
 
 
-def wait_for_dns(record_name, txt_value, interval=10):
+def wait_for_dns(record_name: str, txt_value: str, interval: int = 10) -> None:
     LOG.info(f"Waiting for DNS propagation of {record_name}")
 
     resolver = dns.resolver.Resolver()
@@ -430,9 +434,9 @@ def get_certificate_for_domains_dns(
     domains: list[str],
     dns_provider: str,
     email: str,
-    access_token: str,
+    access_token: str | None,
     renew_command: str,
-):
+) -> None:
     create_acme_account(domain=domains[0], email=email)
     LOG.info(f"Starting certificate request for domains: {domains}")
 
@@ -499,7 +503,7 @@ def get_certificate_for_domains_dns(
     cert.save(f"{PYACME_HOME_PATH}/{domains[0]}/certificate.json")
 
 
-def renew_certificate(cert_json_path: str):
+def renew_certificate(cert_json_path: str) -> None:
     if not os.path.exists(cert_json_path):
         raise RuntimeError("No certificate.json found for domain")
 
@@ -567,7 +571,9 @@ def renew_certificate(cert_json_path: str):
     cert_data.update(
         {
             "expiry_date": new_expiry_date,
-            "last_renewed": datetime.datetime.utcnow().isoformat() + "Z",
+            "last_renewed": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
             "status": "valid",
         }
     )
