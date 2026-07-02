@@ -26,6 +26,7 @@ class SSLCertificate:
         provider: str,
         provider_conf: str,
         email: str,
+        dns_servers: list[str] | None = None,
     ):
         self.domain = domain
         self.certificate_path = certificate_path
@@ -42,6 +43,7 @@ class SSLCertificate:
         self.provider = provider
         self.provider_conf = provider_conf
         self.email = email
+        self.dns_servers = dns_servers
 
     @classmethod
     def open(cls, file_path: str) -> "SSLCertificate":
@@ -66,6 +68,7 @@ class SSLCertificate:
             "provider": self.provider,
             "provider_conf": self.provider_conf,
             "email": self.email,
+            "dns_servers": self.dns_servers,
         }
         if file_path is None:
             raise ValueError("File path must be provided to save.")
@@ -97,6 +100,7 @@ class SSLCertificate:
         renew_before_days: int = 30,
         renew_command: str = "",
         email: str = "",
+        dns_servers: list[str] | None = None,
     ) -> "SSLCertificate":
         """Read SSL certificate from PEM file and create an SSLCertificate instance."""
         with open(cert_path, "rb") as f:
@@ -144,6 +148,7 @@ class SSLCertificate:
             provider=provider,
             provider_conf=provider_conf,
             email=email,
+            dns_servers=dns_servers,
         )
 
         # Optional: verify private key matches

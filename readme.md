@@ -111,7 +111,9 @@ python -m pyacmecli new \
   --provider cloudflare \
   --email admin@example.com \
   --access-token 'provider-token' \
-  --renew-command 'systemctl reload nginx'
+  --renew-command 'systemctl reload nginx' \
+  --dns-server 1.1.1.1 \
+  --dns-server 8.8.8.8
 ```
 
 Options:
@@ -123,6 +125,7 @@ Options:
 | `--email` | Yes | Email used for the Let's Encrypt account. |
 | `--access-token` | Cloudflare/ArvanCloud only | DNS provider API token. |
 | `--renew-command` | Yes | Shell command to run after successful renewal. |
+| `--dns-server` | No | DNS resolver IP used while checking TXT propagation. Can be used multiple times or comma-separated. When omitted, PyACME uses the system DNS configuration. |
 
 ### `list`
 

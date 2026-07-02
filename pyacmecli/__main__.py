@@ -32,6 +32,17 @@ CERTIFICATE_TABLE_HEADERS = [
 ]
 
 
+def normalize_dns_servers(dns_servers: tuple[str, ...]) -> list[str] | None:
+    """Normalize repeated/comma-separated --dns-server values."""
+    normalized = [
+        server.strip()
+        for value in dns_servers
+        for server in value.split(",")
+        if server.strip()
+    ]
+    return normalized or None
+
+
 def run_renew_command_as_subprocess_command(renew_command: str | None) -> None:
     if renew_command and renew_command.strip():
         try:
@@ -187,6 +198,16 @@ def certificate_renew(ctx: click.Context, force_renewal: bool = False) -> None:
 @click.option(
     "--renew-command", help="Renew commands e.g myapp --reload", required=True
 )
+@click.option(
+    "--dns-server",
+    "dns_servers",
+    multiple=True,
+    help=(
+        "DNS resolver IP to use while checking TXT propagation. "
+        "Can be used multiple times or comma-separated. "
+        "Defaults to the system DNS configuration."
+    ),
+)
 @click.pass_context
 def certificate_new(
     ctx: click.Context,
@@ -195,6 +216,7 @@ def certificate_new(
     access_token: str | None,
     email: str,
     renew_command: str,
+    dns_servers: tuple[str, ...],
 ) -> None:
     """Request a new certificate for the given domain(s) and provider."""
     for _domain in domain:
@@ -215,7 +237,12 @@ def certificate_new(
         )
 
     get_certificate_for_domains_dns(
-        list(domain), provider, email, access_token, renew_command
+        list(domain),
+        provider,
+        email,
+        access_token,
+        renew_command,
+        dns_servers=normalize_dns_servers(dns_servers),
     )
 
 
