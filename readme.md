@@ -1,38 +1,69 @@
-# PyACME CLI
+<p align="center">
+  <br>
+  <h1 align="center">PyACME CLI</h1>
+  <p align="center">
+    <em>Let's Encrypt certificate management with DNS-01 validation & automatic renewal</em>
+    <br>
+    <a href="https://pypi.org/project/pyacmecli/"><img src="https://img.shields.io/pypi/v/pyacmecli?style=flat-square" alt="PyPI"></a>
+    <a href="https://pypi.org/project/pyacmecli/"><img src="https://img.shields.io/pypi/pyversions/pyacmecli?style=flat-square" alt="Python"></a>
+    <a href="https://github.com/anomalyco/pyacme/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
+  </p>
+</p>
 
-PyACME CLI is a small Python command line tool for issuing and renewing
-Let's Encrypt certificates with DNS-01 validation.
+**PyACME CLI** is a lightweight Python command-line tool for issuing and renewing Let's Encrypt TLS/SSL certificates using **DNS-01 validation**. It supports wildcard certificates, multiple DNS providers, and fully automated renewal via cron.
 
-It can create wildcard certificates, manage DNS challenge records through
-supported providers, store certificate metadata locally, list existing
-certificates, and renew certificates from cron.
+---
+
+- [Features](#features)
+- [Supported Providers](#supported-providers)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Commands](#commands)
+  - [`init`](#init)
+  - [`new`](#new)
+  - [`list`](#list)
+  - [`cron`](#cron)
+- [Provider Examples](#provider-examples)
+  - [Cloudflare](#cloudflare)
+  - [ArvanCloud](#arvancloud)
+  - [AcmeDNS](#acmedns)
+  - [Manual DNS](#manual-dns)
+- [Local Files](#local-files)
+- [Logging](#logging)
+- [Production Setup Example](#production-setup-example)
+- [Development](#development)
+- [License](#license)
+
+---
 
 ## Features
 
-- Issue Let's Encrypt certificates with DNS-01 challenges.
-- Support wildcard domains such as `*.example.com`.
-- Support multiple names on one certificate.
-- Automatically create TXT records with Cloudflare, ArvanCloud, or AcmeDNS.
-- Support manual DNS TXT records when no provider integration is used.
-- Store certificates, private keys, account keys, and metadata under `~/.pyacme`.
-- Renew certificates automatically and run a custom command after renewal.
-- Show certificate status in a terminal table.
+- Issue Let's Encrypt certificates with **DNS-01 challenges**
+- Wildcard domains (`*.example.com`) and **multi-domain SAN certificates**
+- Automated TXT record management via **Cloudflare**, **ArvanCloud**, or **AcmeDNS**
+- **Manual DNS** mode for providers without an integration
+- Local certificate store under `~/.pyacme` (PEM + JSON metadata)
+- **Automatic renewal** with custom post-renew hook command
+- Certificate status overview in a terminal table
+- Configurable DNS resolvers for propagation checks
+- Colorized logging with configurable verbosity
 
 ## Supported Providers
 
-| Provider | Value | Access token required | Notes |
-| --- | --- | --- | --- |
-| Cloudflare | `cloudflare` | Yes | Uses the Cloudflare DNS API. |
-| ArvanCloud | `arvancloud` | Yes | Uses the ArvanCloud DNS API. |
-| AcmeDNS | `acmedns` | No | First run asks you to create a CNAME record. |
-| Manual DNS | `dns` | No | Prints the TXT record and waits for you to add it. |
+| Provider | CLI Value | Access Token | Notes |
+|----------|-----------|--------------|-------|
+| Cloudflare | `cloudflare` | Yes | Cloudflare DNS API |
+| ArvanCloud | `arvancloud` | Yes | ArvanCloud DNS API |
+| AcmeDNS | `acmedns` | No | Registers subdomain at `auth.acme-dns.io`; first run prints a CNAME record to add to your zone |
+| Manual DNS | `dns` | No | Prints the TXT record and waits for you to add it manually |
 
 ## Requirements
 
-- Python 3.12 or newer
+- Python **3.12+**
 - A domain you control
-- DNS access for `_acme-challenge` records
-- Network access to Let's Encrypt and your DNS provider API
+- DNS access to create `_acme-challenge` records
+- Network access to `acme-v02.api.letsencrypt.org` and your DNS provider API
 
 ## Installation
 
@@ -40,7 +71,7 @@ certificates, and renew certificates from cron.
 pip install pyacmecli
 ```
 
-You can run the CLI with:
+Run the CLI:
 
 ```bash
 python -m pyacmecli --help
@@ -48,13 +79,13 @@ python -m pyacmecli --help
 
 ## Quick Start
 
-Initialize the local PyACME directory:
+Initialize the local data directory:
 
 ```bash
 python -m pyacmecli init
 ```
 
-Issue a certificate with Cloudflare:
+Issue a wildcard certificate with Cloudflare:
 
 ```bash
 python -m pyacmecli new \
@@ -72,13 +103,13 @@ List saved certificates:
 python -m pyacmecli list
 ```
 
-Renew certificates that expire within the next 30 days:
+Renew certificates expiring within 30 days:
 
 ```bash
 python -m pyacmecli cron
 ```
 
-Force renewal for all saved certificates:
+Force-renew every certificate:
 
 ```bash
 python -m pyacmecli cron --force-renewal
@@ -88,21 +119,15 @@ python -m pyacmecli cron --force-renewal
 
 ### `init`
 
-Creates the local data directory:
+Create the local data directory (`~/.pyacme`):
 
 ```bash
 python -m pyacmecli init
 ```
 
-PyACME stores data in:
-
-```text
-~/.pyacme
-```
-
 ### `new`
 
-Requests a new certificate.
+Request a new certificate.
 
 ```bash
 python -m pyacmecli new \
@@ -111,45 +136,45 @@ python -m pyacmecli new \
   --provider cloudflare \
   --email admin@example.com \
   --access-token 'provider-token' \
-  --renew-command 'systemctl reload nginx'
+  --renew-command 'systemctl reload nginx' \
+  --dns-server 1.1.1.1 \
+  --dns-server 8.8.8.8
 ```
 
-Options:
-
 | Option | Required | Description |
-| --- | --- | --- |
-| `--domain` | Yes | Domain name. Can be used multiple times. |
-| `--provider` | Yes | One of `cloudflare`, `arvancloud`, `acmedns`, or `dns`. |
-| `--email` | Yes | Email used for the Let's Encrypt account. |
+|--------|----------|-------------|
+| `--domain` | Yes | Domain name. Repeatable for SAN certificates. |
+| `--provider` | Yes | One of `cloudflare`, `arvancloud`, `acmedns`, `dns`. |
+| `--email` | Yes | Email for the Let's Encrypt account registration. |
 | `--access-token` | Cloudflare/ArvanCloud only | DNS provider API token. |
 | `--renew-command` | Yes | Shell command to run after successful renewal. |
+| `--dns-server` | No | DNS resolver IP for TXT propagation checks. Repeatable or comma-separated. Defaults to system DNS. |
 
 ### `list`
 
-Shows certificates saved under `~/.pyacme`:
+Display all certificates stored in `~/.pyacme`:
 
 ```bash
 python -m pyacmecli list
 ```
 
-The table includes the domain, certificate path, expiry date, status, renew
-command, and last renewal time.
+Output columns: ID, Domain, Certificate Path, Expiry Date, Status, Renew Command, Last Renew.
 
 ### `cron`
 
-Renews certificates that expire within 30 days:
+Renew certificates expiring within 30 days:
 
 ```bash
 python -m pyacmecli cron
 ```
 
-Run it from cron once per day:
+Recommended cron schedule (daily at 2 AM):
 
 ```cron
 0 2 * * * /path/to/venv/bin/python -m pyacmecli cron
 ```
 
-To renew every certificate regardless of expiry date:
+Force-renew all certificates regardless of expiry:
 
 ```bash
 python -m pyacmecli cron --force-renewal
@@ -165,12 +190,11 @@ python -m pyacmecli new \
   --domain '*.example.com' \
   --provider cloudflare \
   --email admin@example.com \
-  --access-token 'cloudflare-api-token' \
+  --access-token 'cf-api-token' \
   --renew-command 'systemctl reload nginx'
 ```
 
-The token needs permission to read zones and edit DNS records for the target
-zone.
+The token requires **Zone:Read** and **DNS:Edit** permissions for the target zone.
 
 ### ArvanCloud
 
@@ -195,8 +219,7 @@ python -m pyacmecli new \
   --renew-command 'systemctl reload nginx'
 ```
 
-On the first run, PyACME registers with `auth.acme-dns.io` and prints a CNAME
-record. Add that CNAME to your DNS zone, then press Enter to continue.
+On the first run, PyACME registers a subdomain with `auth.acme-dns.io` and prints a CNAME record. Add that CNAME (`_acme-challenge -> <fulldomain>`) to your DNS zone, then press Enter to continue.
 
 ### Manual DNS
 
@@ -209,40 +232,40 @@ python -m pyacmecli new \
   --renew-command 'systemctl reload nginx'
 ```
 
-PyACME prints the required `_acme-challenge` TXT record and waits until you add
-it to DNS.
+PyACME prints the `_acme-challenge` TXT record value and waits for you to add it to your DNS zone before continuing.
 
 ## Local Files
 
-For each certificate, PyACME creates a directory under `~/.pyacme` using the
-first domain name from the request.
+All data is stored under `~/.pyacme/<domain>/`:
 
-Example:
-
-```text
-~/.pyacme/example.com/
-  account.key.pem
-  account_url.result
-  cert.pem
-  privkey.pem
-  certificate.json
+```
+~/.pyacme/
+└── example.com/
+    ├── account.key.pem      # ACME account private key (RSA 2048)
+    ├── account_url.result   # ACME account URL
+    ├── cert.pem             # Issued certificate (full chain)
+    ├── privkey.pem          # Certificate private key (RSA 2048)
+    ├── certificate.json     # Metadata (expiry, provider, renew command, etc.)
+    └── conf.json            # (AcmeDNS only) provider configuration
 ```
 
-Do not delete this directory if you want automated renewal to keep working.
+Do **not** delete these directories if you want automated renewal to work.
 
 ## Logging
 
-Enable debug output with:
+Enable debug output:
 
 ```bash
 python -m pyacmecli --verbose new ...
 ```
 
-Or set a specific log level:
+Set a specific log level:
 
 ```bash
 python -m pyacmecli --log-level DEBUG list
 ```
+
+Available levels: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
 
 ## Production Setup Example
 
@@ -260,7 +283,7 @@ python -m pyacmecli new \
   --domain '*.example.com' \
   --provider cloudflare \
   --email admin@example.com \
-  --access-token 'cloudflare-api-token' \
+  --access-token 'cf-api-token' \
   --renew-command 'docker restart nginx'
 
 python -m pyacmecli list
@@ -275,28 +298,18 @@ Cron entry:
 
 ## Development
 
-Install dependencies with uv:
+Clone the repository and install dependencies:
 
 ```bash
+git clone https://github.com/anomalyco/pyacme.git
+cd pyacme
 uv sync
 ```
 
-Run the CLI from the repository:
+Run the CLI from the working tree:
 
 ```bash
 uv run python -m pyacmecli --help
-```
-
-Build the package:
-
-```bash
-uv build
-```
-
-Publish the package:
-
-```bash
-uv publish
 ```
 
 Run linting:
@@ -305,7 +318,34 @@ Run linting:
 uv run ruff check .
 ```
 
+Format code:
+
+```bash
+uv run ruff format .
+```
+
+Run pre-commit checks:
+
+```bash
+pre-commit run --all-files --config .pre-commit-config.yaml
+```
+
+Build the package:
+
+```bash
+uv build
+```
+
+Publish to PyPI:
+
+```bash
+uv publish
+```
+
 ## License
 
-This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE)
-for details.
+```
+Apache License 2.0
+```
+
+This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.

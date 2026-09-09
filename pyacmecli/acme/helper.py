@@ -288,6 +288,7 @@ def perform_dns_challenge(
     jwk,
     provider_name,
     access_token: str | None = None,
+    dns_servers: list[str] | None = None,
 ):
     # Step 1: GET authz details
     resp = session.get(authz_url, timeout=10)
@@ -327,7 +328,7 @@ def perform_dns_challenge(
             "Have you added the TXT record to your zone? Press Enter to continue. "
         )
 
-    wait_for_dns(record_name, txt_value)
+    wait_for_dns(record_name, txt_value, dns_servers=dns_servers)
 
     challenge_url = dns_challenge["url"]
     resp = post_jws(
@@ -344,11 +345,20 @@ def perform_dns_challenge(
             LOG.warning("Already Invalid try to validate again")
 
 
-def wait_for_dns(record_name: str, txt_value: str, interval: int = 10) -> None:
+def wait_for_dns(
+    record_name: str,
+    txt_value: str,
+    interval: int = 10,
+    dns_servers: list[str] | None = None,
+) -> None:
     LOG.info(f"Waiting for DNS propagation of {record_name}")
 
     resolver = dns.resolver.Resolver()
-    resolver.nameservers = ["1.1.1.1", "8.8.8.8"]
+    if dns_servers:
+        resolver.nameservers = dns_servers
+        LOG.info(f"Using custom DNS server(s): {', '.join(dns_servers)}")
+    else:
+        LOG.info("Using system DNS configuration")
 
     while True:
         try:
@@ -436,6 +446,7 @@ def get_certificate_for_domains_dns(
     email: str,
     access_token: str | None,
     renew_command: str,
+    dns_servers: list[str] | None = None,
 ) -> None:
     create_acme_account(domain=domains[0], email=email)
     LOG.info(f"Starting certificate request for domains: {domains}")
@@ -478,6 +489,7 @@ def get_certificate_for_domains_dns(
             jwk,
             dns_provider,
             access_token=access_token,
+            dns_servers=dns_servers,
         )
 
     finalize_order(
@@ -498,6 +510,7 @@ def get_certificate_for_domains_dns(
         provider=dns_provider,
         provider_conf=access_token,
         email=email,
+        dns_servers=dns_servers,
     )
 
     cert.save(f"{PYACME_HOME_PATH}/{domains[0]}/certificate.json")
@@ -513,6 +526,7 @@ def renew_certificate(cert_json_path: str) -> None:
     domain = cert_data["domain"].replace("*.", "")
     dns_provider = cert_data["provider"]
     access_token = cert_data.get("provider_conf")
+    dns_servers = cert_data.get("dns_servers")
 
     session = requests.Session()
     directory = get_directory(session, DIRECTORY_ADDRESS)
@@ -549,6 +563,7 @@ def renew_certificate(cert_json_path: str) -> None:
             jwk=jwk,
             provider_name=dns_provider,
             access_token=access_token,
+            dns_servers=dns_servers,
         )
 
     finalize_order(
