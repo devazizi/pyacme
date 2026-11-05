@@ -15,7 +15,12 @@ from pyacmecli.acme.helper import (
     renew_certificate,
 )
 from pyacmecli.common.certificates import get_certificate_list
-from pyacmecli.happylog import LOG, set_log_level, set_verbosity
+from pyacmecli.happylog import (
+    LOG,
+    set_log_file,
+    set_log_level,
+    set_verbosity,
+)
 
 SUPPORTABLE_PROVIDER = ("arvancloud", "cloudflare", "acmedns", "dns")
 ARVANCLOUD = "arvancloud"
@@ -71,13 +76,35 @@ def run_renew_command_as_subprocess_command(renew_command: str | None) -> None:
     default=None,
     help="Set log level explicitly. Overrides --verbose when set.",
 )
+@click.option(
+    "--log-file",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help="Optional file path to write structured log output.",
+)
+@click.option(
+    "--staging",
+    is_flag=True,
+    default=False,
+    help="Use Let's Encrypt Staging ACME directory.",
+)
 @click.pass_context
 def main_command(
-    ctx: click.Context, verbose: bool = False, log_level: str | None = None
+    ctx: click.Context,
+    verbose: bool = False,
+    log_level: str | None = None,
+    log_file: str | None = None,
+    staging: bool = False,
 ) -> None:
-    """Root CLI group; sets verbosity and log level."""
+    """Root CLI group; sets verbosity, log level, log file, and staging."""
     ctx.ensure_object(dict)
     ctx.obj["VERBOSE"] = verbose
+    ctx.obj["LOG_FILE"] = log_file
+    ctx.obj["STAGING"] = staging
+
+    if log_file:
+        set_log_file(log_file)
+
     if log_level is not None:
         set_log_level(log_level)
     else:
@@ -130,9 +157,36 @@ def certificate_list(ctx: click.Context) -> None:
 @click.option(
     "--force-renewal", is_flag=True, help="Force renewal certificates"
 )
+@click.option(
+    "--staging",
+    is_flag=True,
+    default=None,
+    help="Use Let's Encrypt Staging ACME directory.",
+)
+@click.option(
+    "--log-file",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help="Optional file path to write log output.",
+)
 @click.pass_context
-def certificate_renew(ctx: click.Context, force_renewal: bool = False) -> None:
+def certificate_renew(
+    ctx: click.Context,
+    force_renewal: bool = False,
+    staging: bool | None = None,
+    log_file: str | None = None,
+) -> None:
     """Renew certificates that expire within 30 days, or all if --force-renewal."""
+    effective_log_file = log_file or (ctx.obj or {}).get("LOG_FILE")
+    if effective_log_file:
+        set_log_file(effective_log_file)
+
+    effective_staging = (
+        staging
+        if staging is not None
+        else (True if (ctx.obj or {}).get("STAGING") else None)
+    )
+
     base_dir = os.path.expanduser(PYACME_HOME_PATH)
 
     if not os.path.exists(base_dir):
@@ -153,7 +207,7 @@ def certificate_renew(ctx: click.Context, force_renewal: bool = False) -> None:
             )
             if target_time <= one_month_later:
                 LOG.info(f"Start renewing certificate {cert.domain}")
-                renew_certificate(cert_json_path)
+                renew_certificate(cert_json_path, staging=effective_staging)
                 run_renew_command_as_subprocess_command(cert.renew_command)
             else:
                 LOG.info(
@@ -161,7 +215,7 @@ def certificate_renew(ctx: click.Context, force_renewal: bool = False) -> None:
                 )
         else:
             LOG.warning("Force renewing certificates")
-            renew_certificate(cert_json_path)
+            renew_certificate(cert_json_path, staging=effective_staging)
             run_renew_command_as_subprocess_command(cert.renew_command)
 
 
@@ -187,6 +241,18 @@ def certificate_renew(ctx: click.Context, force_renewal: bool = False) -> None:
 @click.option(
     "--renew-command", help="Renew commands e.g myapp --reload", required=True
 )
+@click.option(
+    "--staging",
+    is_flag=True,
+    default=None,
+    help="Use Let's Encrypt Staging ACME directory.",
+)
+@click.option(
+    "--log-file",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help="Optional file path to write log output.",
+)
 @click.pass_context
 def certificate_new(
     ctx: click.Context,
@@ -195,8 +261,20 @@ def certificate_new(
     access_token: str | None,
     email: str,
     renew_command: str,
+    staging: bool | None = None,
+    log_file: str | None = None,
 ) -> None:
     """Request a new certificate for the given domain(s) and provider."""
+    effective_log_file = log_file or (ctx.obj or {}).get("LOG_FILE")
+    if effective_log_file:
+        set_log_file(effective_log_file)
+
+    effective_staging = (
+        staging
+        if staging is not None
+        else (ctx.obj or {}).get("STAGING", False)
+    )
+
     for _domain in domain:
         domain_validator(_domain)
 
@@ -215,7 +293,12 @@ def certificate_new(
         )
 
     get_certificate_for_domains_dns(
-        list(domain), provider, email, access_token, renew_command
+        list(domain),
+        provider,
+        email,
+        access_token,
+        renew_command,
+        staging=effective_staging,
     )
 
 

@@ -26,6 +26,9 @@ class SSLCertificate:
         provider: str,
         provider_conf: str,
         email: str,
+        domains: Optional[list[str]] = None,
+        staging: bool = False,
+        **kwargs,
     ):
         self.domain = domain
         self.certificate_path = certificate_path
@@ -38,10 +41,15 @@ class SSLCertificate:
             last_renewed.replace("Z", "+00:00")
         )
         self.renew_command = renew_command
-        self.status = (status,)
+        if isinstance(status, (tuple, list)):
+            self.status = str(status[0]) if status else "valid"
+        else:
+            self.status = str(status)
         self.provider = provider
         self.provider_conf = provider_conf
         self.email = email
+        self.domains = domains if domains is not None else [domain]
+        self.staging = bool(staging)
 
     @classmethod
     def open(cls, file_path: str) -> "SSLCertificate":
@@ -62,11 +70,15 @@ class SSLCertificate:
                 "+00:00", "Z"
             ),
             "renew_command": self.renew_command,
-            "status": "".join(self.status),
+            "status": self.status,
             "provider": self.provider,
             "provider_conf": self.provider_conf,
             "email": self.email,
         }
+        if self.domains:
+            data["domains"] = self.domains
+        if self.staging:
+            data["staging"] = self.staging
         if file_path is None:
             raise ValueError("File path must be provided to save.")
         with open(file_path, "w") as f:
@@ -117,6 +129,7 @@ class SSLCertificate:
             domains = san.value.get_values_for_type(x509.DNSName)
             domain = domains[0] if domains else common_name
         except x509.ExtensionNotFound:
+            domains = [common_name] if common_name else []
             domain = common_name
 
         # Use UTC-aware datetime
@@ -144,6 +157,7 @@ class SSLCertificate:
             provider=provider,
             provider_conf=provider_conf,
             email=email,
+            domains=domains,
         )
 
         # Optional: verify private key matches

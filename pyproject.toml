@@ -28,9 +28,18 @@ package = true
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.0",
+    "pytest>=8.0.0",
+    "pytest-mock>=3.14.0",
     "ruff>=0.14.8",
     "twine>=6.2.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --strict-markers"
+
 
 [tool.ruff]
 line-length = 80

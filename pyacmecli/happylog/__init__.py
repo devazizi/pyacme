@@ -1,6 +1,8 @@
 """Colored console logger for pyacme CLI."""
 
+import copy
 import logging
+import os
 import sys
 
 
@@ -17,12 +19,13 @@ class ColorFormatter(logging.Formatter):
     RESET = "\033[0m"
 
     def format(self, record: logging.LogRecord) -> str:
-        levelname = record.levelname
+        record_copy = copy.copy(record)
+        levelname = record_copy.levelname
         if levelname in self.COLORS:
-            record.levelname = (
+            record_copy.levelname = (
                 f"{self.COLORS[levelname]}{levelname}{self.RESET}"
             )
-        return super().format(record)
+        return super().format(record_copy)
 
 
 def setup_custom_logger(name: str) -> logging.Logger:
@@ -70,4 +73,41 @@ def set_log_level(level: str | int) -> None:
     LOG.setLevel(level)
 
 
-__all__ = ["LOG", "set_verbosity", "set_log_level", "LEVEL_NAMES"]
+def remove_file_handlers() -> None:
+    """Remove and close any FileHandlers attached to LOG."""
+    for h in list(LOG.handlers):
+        if isinstance(h, logging.FileHandler):
+            LOG.removeHandler(h)
+            h.close()
+
+
+def set_log_file(file_path: str | os.PathLike) -> logging.FileHandler:
+    """Configure structured, clean file logging for background and cron execution."""
+    path_str = os.path.expanduser(str(file_path))
+    parent_dir = os.path.dirname(os.path.abspath(path_str))
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+    remove_file_handlers()
+
+    file_formatter = logging.Formatter(
+        fmt="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    file_handler = logging.FileHandler(path_str, encoding="utf-8")
+    file_handler.setFormatter(file_formatter)
+    file_handler.setLevel(logging.DEBUG)
+    LOG.addHandler(file_handler)
+    return file_handler
+
+
+__all__ = [
+    "LOG",
+    "set_verbosity",
+    "set_log_level",
+    "set_log_file",
+    "remove_file_handlers",
+    "LEVEL_NAMES",
+    "ColorFormatter",
+    "setup_custom_logger",
+]
