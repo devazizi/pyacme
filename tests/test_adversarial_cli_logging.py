@@ -171,14 +171,10 @@ def test_cli_new_staging_url_propagation(cli_runner, tmp_path, rsa_key):
         patch("pyacmecli.__main__.PYACME_HOME_PATH", str(tmp_path)),
         patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(tmp_path)),
         patch("pyacmecli.acme.helper.get_directory") as mock_dir,
-        patch("pyacmecli.acme.helper.create_acme_account") as mock_acc,
         patch(
-            "pyacmecli.acme.helper.load_or_make_rsa_key", return_value=rsa_key
-        ),
-        patch(
-            "pyacmecli.acme.helper.account_directory_url",
-            return_value="http://acc",
-        ),
+            "pyacmecli.acme.helper.ensure_account",
+            return_value=("accounts/test", rsa_key, "http://acc"),
+        ) as mock_acc,
         patch("pyacmecli.acme.helper.post_jws") as mock_post,
         patch("pyacmecli.acme.helper.perform_dns_challenge"),
         patch("pyacmecli.acme.helper.finalize_order"),
@@ -210,11 +206,8 @@ def test_cli_new_staging_url_propagation(cli_runner, tmp_path, rsa_key):
             catch_exceptions=False,
         )
         assert result.exit_code == 0
-        assert mock_acc.call_args[1].get("staging") is True
-        assert (
-            mock_acc.call_args[1].get("directory_url")
-            == helper.LETSENCRYPT_STAGING_DIRECTORY
-        )
+        # ensure_account(session, directory, directory_url, email)
+        assert mock_acc.call_args[0][2] == helper.LETSENCRYPT_STAGING_DIRECTORY
         assert mock_dir.call_args[0][1] == helper.LETSENCRYPT_STAGING_DIRECTORY
 
 
@@ -255,6 +248,10 @@ def test_cli_cron_staging_url_propagation(
         patch(
             "pyacmecli.acme.helper.account_directory_url",
             return_value="http://acc",
+        ),
+        patch(
+            "pyacmecli.acme.helper.ensure_account",
+            return_value=("accounts/test", rsa_key, "http://acc"),
         ),
         patch("pyacmecli.acme.helper.post_jws") as mock_post,
         patch("pyacmecli.acme.helper.perform_dns_challenge"),
@@ -317,6 +314,10 @@ def test_cli_cron_without_staging_should_preserve_stored_staging_flag(
         patch(
             "pyacmecli.acme.helper.account_directory_url",
             return_value="http://acc",
+        ),
+        patch(
+            "pyacmecli.acme.helper.ensure_account",
+            return_value=("accounts/test", rsa_key, "http://acc"),
         ),
         patch("pyacmecli.acme.helper.post_jws") as mock_post,
         patch("pyacmecli.acme.helper.perform_dns_challenge"),

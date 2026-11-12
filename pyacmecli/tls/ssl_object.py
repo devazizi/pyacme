@@ -31,6 +31,7 @@ class SSLCertificate:
         staging: bool = False,
         key_type: str = "rsa2048",
         directory_url: Optional[str] = None,
+        account: Optional[str] = None,
         **kwargs,
     ):
         self.domain = domain
@@ -55,6 +56,7 @@ class SSLCertificate:
         self.staging = bool(staging)
         self.key_type = key_type
         self.directory_url = directory_url
+        self.account = account
 
     @classmethod
     def open(cls, file_path: str) -> "SSLCertificate":
@@ -87,6 +89,8 @@ class SSLCertificate:
             data["staging"] = self.staging
         if self.directory_url:
             data["directory_url"] = self.directory_url
+        if self.account:
+            data["account"] = self.account
         if file_path is None:
             raise ValueError("File path must be provided to save.")
         # Holds the DNS provider credential (provider_conf).

@@ -30,6 +30,7 @@ from pyacmecli.common.fsutil import (
     LockBusyError,
     write_atomic,
 )
+from pyacmecli.webhooks import PROVIDERS, provider_token_env
 from pyacmecli.happylog import (
     LOG,
     set_log_file,
@@ -37,27 +38,10 @@ from pyacmecli.happylog import (
     set_verbosity,
 )
 
-SUPPORTABLE_PROVIDER = (
-    "arvancloud",
-    "cloudflare",
-    "acmedns",
-    "dns",
-    "digitalocean",
-    "hetzner",
-    "powerdns",
-    "route53",
-    "ovh",
+SUPPORTABLE_PROVIDER = tuple(PROVIDERS)
+TOKEN_REQUIRED_PROVIDERS = tuple(
+    name for name, spec in PROVIDERS.items() if spec.token_required
 )
-TOKEN_REQUIRED_PROVIDERS = (
-    "arvancloud",
-    "cloudflare",
-    "digitalocean",
-    "hetzner",
-    "powerdns",
-    "ovh",
-)
-ARVANCLOUD = "arvancloud"
-CLOUDFLARE = "cloudflare"
 
 CERTIFICATE_TABLE_HEADERS = [
     "ID",
@@ -595,8 +579,21 @@ def certificate_renew(
 )
 @click.option(
     "--access-token",
-    help="Provider API token, key, or credentials string",
+    help=(
+        "Provider API token, key, or credentials string. Prefer the "
+        "PYACME_<PROVIDER>_TOKEN variable (e.g. PYACME_CLOUDFLARE_TOKEN) to "
+        "keep it out of shell history and process listings."
+    ),
     required=False,
+)
+@click.option(
+    "--no-store-token",
+    is_flag=True,
+    default=False,
+    help=(
+        "Do not save the credential in certificate.json; renewals then "
+        "read it from PYACME_<PROVIDER>_TOKEN."
+    ),
 )
 @click.option("--email", help="Email address", required=True)
 @click.option(
@@ -633,6 +630,7 @@ def certificate_new(
     staging: bool | None = None,
     log_file: str | None = None,
     key_type: str = DEFAULT_KEY_TYPE,
+    no_store_token: bool = False,
 ) -> None:
     """Request a new certificate for the given domain(s) and provider."""
     effective_log_file = log_file or (ctx.obj or {}).get("LOG_FILE")
@@ -656,9 +654,11 @@ def certificate_new(
             f"Invalid provider, valid providers {SUPPORTABLE_PROVIDER}"
         )
 
-    if provider in TOKEN_REQUIRED_PROVIDERS and access_token is None:
+    access_token = access_token or os.environ.get(provider_token_env(provider))
+    if provider in TOKEN_REQUIRED_PROVIDERS and not access_token:
         raise click.ClickException(
-            f"--access-token required when provider is {provider}"
+            f"--access-token or {provider_token_env(provider)} required "
+            f"when provider is {provider}"
         )
 
     get_certificate_for_domains_dns(
@@ -670,6 +670,7 @@ def certificate_new(
         staging=effective_staging,
         directory_url=(ctx.obj or {}).get("DIRECTORY_URL"),
         key_type=key_type,
+        store_token=not no_store_token,
     )
 
 

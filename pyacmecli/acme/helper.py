@@ -4,10 +4,12 @@ import base64
 import hashlib
 import json
 import os
+import re
 import time
 import weakref
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 
 import dns.exception
 import dns.name
@@ -28,15 +30,8 @@ from pyacmecli.common.fsutil import (
 )
 from pyacmecli.happylog import LOG
 from pyacmecli.tls.ssl_object import SSLCertificate
-from pyacmecli.webhooks.acmedns import AcmeDNS
-from pyacmecli.webhooks.arvancloud import ArvanCloud
+from pyacmecli.webhooks import PROVIDERS, provider_token_env
 from pyacmecli.webhooks.base import Base
-from pyacmecli.webhooks.cloudflare import Cloudflare
-from pyacmecli.webhooks.digitalocean import DigitalOcean
-from pyacmecli.webhooks.hetzner import Hetzner
-from pyacmecli.webhooks.ovh import OVH
-from pyacmecli.webhooks.powerdns import PowerDNS
-from pyacmecli.webhooks.route53 import Route53
 
 PYACME_HOME_PATH = os.path.expanduser("~/.pyacme")
 LETSENCRYPT_PRODUCTION_DIRECTORY = (
@@ -101,52 +96,79 @@ def pyacme_lock():
     return exclusive_lock(os.path.join(PYACME_HOME_PATH, ".lock"))
 
 
-def create_acme_account(
-    email: str,
-    domain: str,
-    staging: bool = False,
-    directory_url: str | None = None,
-) -> str:
-    session = requests.Session()
+# Shared ACME accounts live under accounts/<directory host and path>, one per
+# CA directory, so staging and production never share an account.
+ACCOUNT_DIR_RE = re.compile(r"accounts/(?!\.{1,2}$)[A-Za-z0-9._-]+")
 
-    # Load or create domain-specific account key
-    privkey = load_or_make_rsa_key(f"{domain}/account.key.pem")
-    jwk = jwk_from_privkey(privkey)
 
-    target_directory = get_directory_url(
-        staging=staging, custom_url=directory_url
-    )
-    directory = get_directory(session, target_directory)
-    new_nonce_url = directory["newNonce"]
-    new_account_url = directory.get("newAccount")
+def account_dir_for(directory_url: str) -> str:
+    """Return the account directory (relative to PYACME_HOME_PATH) for a CA."""
+    parts = urlsplit(directory_url)
+    slug = re.sub(r"[^A-Za-z0-9.-]+", "_", f"{parts.netloc}{parts.path}")
+    slug = slug.strip("_.")
+    if not slug:
+        raise ValueError(
+            f"Cannot derive an account name from {directory_url!r}"
+        )
+    return f"accounts/{slug}"
 
-    account_payload = {
-        "termsOfServiceAgreed": True,
-        "contact": [f"mailto:{email}"],
-    }
+
+def ensure_account(
+    session, directory: dict, directory_url: str, email: str
+) -> tuple[str, rsa.RSAPrivateKey, str]:
+    """Return (account_dir, account key, account URL), registering if needed.
+
+    One account per CA is reused for every certificate. Let's Encrypt
+    limits new registrations per IP, and one key is easier to protect and
+    rotate than one per domain. Certificates issued before this keep their
+    per-domain account (see resolve_account_dir).
+    """
+    account_dir = account_dir_for(directory_url)
+    privkey = load_or_make_rsa_key(f"{account_dir}/account.key.pem")
+    url_path = os.path.join(PYACME_HOME_PATH, account_dir, "account_url.result")
+    if os.path.exists(url_path):
+        return account_dir, privkey, account_directory_url(account_dir)
 
     resp = post_jws(
         session,
-        new_account_url,
-        account_payload,
+        directory["newAccount"],
+        {"termsOfServiceAgreed": True, "contact": [f"mailto:{email}"]},
         privkey,
-        new_nonce_url,
-        jwk=jwk,
+        directory["newNonce"],
+        jwk=jwk_from_privkey(privkey),
     )
     acct_url = resp.headers.get("Location")
     if not acct_url:
+        raise RuntimeError(f"CA returned no account URL: {resp.text}")
+    write_private_file(url_path, acct_url)
+    LOG.info(f"Registered ACME account {acct_url}")
+    return account_dir, privkey, acct_url
+
+
+def resolve_account_dir(cert_data: dict, legacy_dir: str) -> str:
+    """Account directory recorded for a certificate, else its legacy one."""
+    stored = cert_data.get("account")
+    if not stored:
+        return legacy_dir
+    if not ACCOUNT_DIR_RE.fullmatch(str(stored)):
+        raise RuntimeError(f"Invalid account reference in metadata: {stored!r}")
+    return str(stored)
+
+
+def resolve_access_token(provider: str, stored: str | None) -> str | None:
+    """Credential for provider: its environment variable, else the stored one.
+
+    The variable wins so a rotated token can be supplied without editing
+    every certificate.json, and so tokens need not be stored at all.
+    """
+    token = os.environ.get(provider_token_env(provider)) or stored
+    spec = PROVIDERS.get(provider)
+    if spec and spec.token_required and not token:
         raise RuntimeError(
-            f"Failed to create account for {domain}: {resp.text}"
+            f"No credential for provider {provider!r}: set "
+            f"{provider_token_env(provider)}"
         )
-
-    # Save account URL in domain-specific directory
-    path = os.path.join(PYACME_HOME_PATH, domain, "account_url.result")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(acct_url)
-
-    LOG.info(f"Created ACME account for {domain} -> {acct_url}")
-    return acct_url
+    return token
 
 
 def init_dir() -> None:
@@ -394,27 +416,12 @@ def thumbprint(jwk: dict[str, str]) -> str:
 def dns_challenge_provider(
     provider_name: str, domain: str, access_token: str | None = None
 ) -> Base | None:
-    cfg_dir = f"{PYACME_HOME_PATH}/{domain}"
-    if provider_name == "cloudflare":
-        return Cloudflare(domain, access_token)
-    elif provider_name == "dns":
-        return None
-    elif provider_name == "arvancloud":
-        return ArvanCloud(domain, access_token)
-    elif provider_name == "acmedns":
-        return AcmeDNS(domain, cfg_dir)
-    elif provider_name == "digitalocean":
-        return DigitalOcean(domain, access_token or "")
-    elif provider_name == "hetzner":
-        return Hetzner(domain, access_token or "")
-    elif provider_name == "powerdns":
-        return PowerDNS(domain, access_token or "")
-    elif provider_name == "route53":
-        return Route53(domain, access_token)
-    elif provider_name == "ovh":
-        return OVH(domain, access_token or "")
-    else:
+    spec = PROVIDERS.get(provider_name)
+    if spec is None:
         raise RuntimeError(f"Invalid provider: {provider_name}")
+    if spec.factory is None:
+        return None
+    return spec.factory(domain, access_token, f"{PYACME_HOME_PATH}/{domain}")
 
 
 def perform_dns_challenge(
@@ -823,15 +830,10 @@ def get_certificate_for_domains_dns(
     staging: bool = False,
     directory_url: str | None = None,
     key_type: str = DEFAULT_KEY_TYPE,
+    store_token: bool = True,
 ) -> None:
     target_directory = get_directory_url(
         staging=staging, custom_url=directory_url
-    )
-    create_acme_account(
-        domain=domains[0],
-        email=email,
-        staging=staging,
-        directory_url=target_directory,
     )
     LOG.info(f"Starting certificate request for domains: {domains}")
 
@@ -839,9 +841,10 @@ def get_certificate_for_domains_dns(
     directory = get_directory(session, target_directory)
     new_nonce_url = directory["newNonce"]
 
-    privkey = load_or_make_rsa_key(file_name=f"{domains[0]}/account.key.pem")
+    account_dir, privkey, account_url = ensure_account(
+        session, directory, target_directory, email
+    )
     jwk = jwk_from_privkey(privkey)
-    account_url = account_directory_url(domains[0])
 
     order_payload = {
         "identifiers": [{"type": "dns", "value": d} for d in domains]
@@ -892,13 +895,14 @@ def get_certificate_for_domains_dns(
         renew_before_days=20,
         renew_command=renew_command,
         provider=dns_provider,
-        provider_conf=access_token,
+        provider_conf=access_token if store_token else None,
         email=email,
     )
     cert.domains = domains
     cert.staging = staging
     cert.key_type = key_type
     cert.directory_url = directory_url
+    cert.account = account_dir
 
     cert.save(f"{PYACME_HOME_PATH}/{domains[0]}/certificate.json")
 
@@ -918,7 +922,9 @@ def renew_certificate(
     folder_domain = os.path.basename(cert_dir)
 
     dns_provider = cert_data["provider"]
-    access_token = cert_data.get("provider_conf")
+    access_token = resolve_access_token(
+        dns_provider, cert_data.get("provider_conf")
+    )
 
     domains = extract_domains_for_renewal(cert_data, cert_dir)
     if not domains:
@@ -936,8 +942,11 @@ def renew_certificate(
         d for d in domains if d != primary_domain
     ]
 
-    # Resolve account directory
-    if os.path.exists(
+    # Resolve account directory: recorded shared account, else the legacy
+    # per-domain account of certificates issued by older versions.
+    if cert_data.get("account"):
+        account_dir_name = resolve_account_dir(cert_data, folder_domain)
+    elif os.path.exists(
         os.path.join(PYACME_HOME_PATH, folder_domain, "account_url.result")
     ):
         account_dir_name = folder_domain
@@ -952,7 +961,8 @@ def renew_certificate(
         ):
             account_dir_name = non_wildcard
         else:
-            account_dir_name = folder_domain
+            # No legacy account on disk: use (or register) the shared one.
+            account_dir_name = None
 
     is_staging = cert_data.get("staging", False) if staging is None else staging
     target_directory = get_directory_url(
@@ -964,11 +974,17 @@ def renew_certificate(
     directory = get_directory(session, target_directory)
     new_nonce_url = directory["newNonce"]
 
-    privkey = load_or_make_rsa_key(
-        file_name=f"{account_dir_name}/account.key.pem"
-    )
+    if account_dir_name is None:
+        account_dir_name, privkey, account_url = ensure_account(
+            session, directory, target_directory, cert_data.get("email", "")
+        )
+        cert_data["account"] = account_dir_name
+    else:
+        privkey = load_or_make_rsa_key(
+            file_name=f"{account_dir_name}/account.key.pem"
+        )
+        account_url = account_directory_url(account_dir_name)
     jwk = jwk_from_privkey(privkey)
-    account_url = account_directory_url(account_dir_name)
 
     identifiers = [{"type": "dns", "value": d} for d in ordered_domains]
     resp = post_jws(
@@ -1248,8 +1264,9 @@ def revoke_certificate(
         raise RuntimeError("Directory does not specify revokeCert endpoint")
 
     new_nonce_url = directory["newNonce"]
-    privkey = load_or_make_rsa_key(file_name=f"{domain}/account.key.pem")
-    account_url = account_directory_url(domain)
+    account_dir = resolve_account_dir(cdata, domain)
+    privkey = load_or_make_rsa_key(file_name=f"{account_dir}/account.key.pem")
+    account_url = account_directory_url(account_dir)
 
     payload = {
         "certificate": b64u(cert_der),

@@ -227,7 +227,7 @@ def test_cli_new_validation_errors(runner):
         ],
     )
     assert res.exit_code != 0
-    assert "--access-token required" in res.output
+    assert "--access-token or PYACME_" in res.output
 
     # Cloudflare without token
     res = runner.invoke(
@@ -245,7 +245,7 @@ def test_cli_new_validation_errors(runner):
         ],
     )
     assert res.exit_code != 0
-    assert "--access-token required" in res.output
+    assert "--access-token or PYACME_" in res.output
 
 
 def test_cli_init_and_list_command(runner, temp_pyacme_home):

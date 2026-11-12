@@ -13,7 +13,7 @@ from pyacmecli.acme.helper import (
     LETSENCRYPT_PRODUCTION_DIRECTORY,
     LETSENCRYPT_STAGING_DIRECTORY,
     b64u,
-    create_acme_account,
+    ensure_account,
     create_csr,
     extract_domains_for_renewal,
     get_directory_url,
@@ -172,43 +172,29 @@ def test_create_csr(session_rsa_key):
 # ============================================================================
 
 
-def test_create_acme_account_offline(temp_pyacme_home, monkeypatch):
-    """Verify offline account creation writes account_url.result inside PYACME_HOME_PATH."""
-    mock_session = MagicMock()
-
-    # Directory response
-    dir_resp = MagicMock()
-    dir_resp.json.return_value = {
+def test_ensure_account_registers_once_per_ca(temp_pyacme_home):
+    """One shared account per CA directory, registered on first use only."""
+    session = MagicMock()
+    session.head.return_value = MagicMock(headers={"Replay-Nonce": "n1"})
+    acct_resp = MagicMock(status_code=201)
+    acct_resp.headers = {"Location": "https://acme.org/acct/98765"}
+    session.post.return_value = acct_resp
+    directory = {
         "newNonce": "https://acme.org/newNonce",
         "newAccount": "https://acme.org/newAccount",
     }
-    dir_resp.raise_for_status = MagicMock()
+    url = "https://acme.org/directory"
 
-    # Nonce head response
-    nonce_resp = MagicMock()
-    nonce_resp.headers = {"Replay-Nonce": "test-nonce-1"}
+    first = ensure_account(session, directory, url, "admin@example.com")
+    second = ensure_account(session, directory, url, "admin@example.com")
 
-    # Account creation response
-    acct_resp = MagicMock()
-    acct_resp.status_code = 201
-    acct_resp.headers = {"Location": "https://acme.org/acct/98765"}
-
-    mock_session.get.return_value = dir_resp
-    mock_session.head.return_value = nonce_resp
-    mock_session.post.return_value = acct_resp
-
-    with patch("requests.Session", return_value=mock_session):
-        acct_url = create_acme_account(
-            email="admin@example.com", domain="example.com", staging=False
-        )
-
-    assert acct_url == "https://acme.org/acct/98765"
+    assert first[0] == second[0] == "accounts/acme.org_directory"
+    assert first[2] == second[2] == "https://acme.org/acct/98765"
+    assert session.post.call_count == 1
     result_path = os.path.join(
-        temp_pyacme_home, "example.com", "account_url.result"
+        temp_pyacme_home, "accounts", "acme.org_directory", "account_url.result"
     )
-    assert os.path.exists(result_path)
-    with open(result_path, "r") as f:
-        assert f.read().strip() == "https://acme.org/acct/98765"
+    assert os.stat(result_path).st_mode & 0o777 == 0o600
 
 
 # ============================================================================
