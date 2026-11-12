@@ -29,6 +29,7 @@ class SSLCertificate:
         email: str,
         domains: Optional[list[str]] = None,
         staging: bool = False,
+        key_type: str = "rsa2048",
         **kwargs,
     ):
         self.domain = domain
@@ -51,6 +52,7 @@ class SSLCertificate:
         self.email = email
         self.domains = domains if domains is not None else [domain]
         self.staging = bool(staging)
+        self.key_type = key_type
 
     @classmethod
     def open(cls, file_path: str) -> "SSLCertificate":
@@ -75,6 +77,7 @@ class SSLCertificate:
             "provider": self.provider,
             "provider_conf": self.provider_conf,
             "email": self.email,
+            "key_type": self.key_type,
         }
         if self.domains:
             data["domains"] = self.domains

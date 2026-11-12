@@ -9,6 +9,8 @@ import click
 from tabulate import tabulate
 
 from pyacmecli.acme.helper import (
+    DEFAULT_KEY_TYPE,
+    KEY_TYPES,
     PYACME_HOME_PATH,
     delete_certificate_data,
     export_certificate,
@@ -455,6 +457,13 @@ def certificate_renew(
     default=None,
     help="Optional file path to write log output.",
 )
+@click.option(
+    "--key-type",
+    type=click.Choice(KEY_TYPES),
+    default=DEFAULT_KEY_TYPE,
+    show_default=True,
+    help="Certificate key type; a new key is generated on every renewal.",
+)
 @click.pass_context
 @locked
 def certificate_new(
@@ -466,6 +475,7 @@ def certificate_new(
     renew_command: str,
     staging: bool | None = None,
     log_file: str | None = None,
+    key_type: str = DEFAULT_KEY_TYPE,
 ) -> None:
     """Request a new certificate for the given domain(s) and provider."""
     effective_log_file = log_file or (ctx.obj or {}).get("LOG_FILE")
@@ -501,6 +511,7 @@ def certificate_new(
         access_token,
         renew_command,
         staging=effective_staging,
+        key_type=key_type,
     )
 
 

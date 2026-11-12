@@ -13,11 +13,16 @@ import requests
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.x509 import NameOID
 from validators import domain as domain_validator
 
-from pyacmecli.common.fsutil import exclusive_lock, write_private_file
+from pyacmecli.common.fsutil import (
+    PUBLIC_FILE_MODE,
+    exclusive_lock,
+    write_atomic,
+    write_private_file,
+)
 from pyacmecli.happylog import LOG
 from pyacmecli.tls.ssl_object import SSLCertificate
 from pyacmecli.webhooks.acmedns import AcmeDNS
@@ -45,6 +50,10 @@ ACME_POLL_INTERVAL = 2
 ACME_POLL_ATTEMPTS = 150  # 150 * 2s = 5 minutes
 # RFC 8555 7.1.6: none of these authorization states can become valid.
 AUTHZ_FAILED_STATES = ("invalid", "deactivated", "expired", "revoked")
+
+# Certificate key types. rsa2048 stays the default for client compatibility.
+DEFAULT_KEY_TYPE = "rsa2048"
+KEY_TYPES = ("rsa2048", "rsa4096", "ec256", "ec384")
 
 
 def get_directory_url(
@@ -505,6 +514,50 @@ def wait_for_dns(
         time.sleep(sleep_time)
 
 
+def generate_private_key(key_type: str = DEFAULT_KEY_TYPE):
+    """Return a new certificate private key of the given type."""
+    if key_type == "rsa2048":
+        return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    if key_type == "rsa4096":
+        return rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    if key_type == "ec256":
+        return ec.generate_private_key(ec.SECP256R1())
+    if key_type == "ec384":
+        return ec.generate_private_key(ec.SECP384R1())
+    raise ValueError(
+        f"Unsupported key type {key_type!r}; choose one of {KEY_TYPES}"
+    )
+
+
+def install_certificate(
+    domain_dir_name: str, certificate_pem: str, private_key
+) -> str:
+    """Store a newly issued certificate and its key; return the cert path.
+
+    The previous pair is kept as cert.pem.prev / privkey.pem.prev for manual
+    rollback. Each file is replaced atomically, the key before the
+    certificate; the renew command that reloads the server runs only after
+    both are in place.
+    """
+    domain_dir = os.path.join(PYACME_HOME_PATH, domain_dir_name)
+    cert_path = os.path.join(domain_dir, "cert.pem")
+    key_path = os.path.join(domain_dir, "privkey.pem")
+
+    for path, mode in ((cert_path, PUBLIC_FILE_MODE), (key_path, 0o600)):
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                write_atomic(f"{path}.prev", f.read(), mode)
+
+    key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    write_private_file(key_path, key_pem)
+    write_atomic(cert_path, certificate_pem, PUBLIC_FILE_MODE)
+    return cert_path
+
+
 def finalize_order(
     session,
     privkey,
@@ -513,10 +566,11 @@ def finalize_order(
     order_data,
     domains,
     order_url,
+    key_type: str = DEFAULT_KEY_TYPE,
 ):
-    cert_privkey = load_or_make_rsa_key(
-        file_name=f"{domains[0]}/privkey.pem", bits=2048
-    )
+    # A fresh key on every issuance limits the exposure of a leaked key to
+    # one certificate lifetime.
+    cert_privkey = generate_private_key(key_type)
 
     csr = create_csr(cert_privkey, domains)
     csr64 = b64u(csr)
@@ -562,13 +616,8 @@ def finalize_order(
     cert_resp.raise_for_status()
     certificate_pem = cert_resp.text
 
-    cert_path = os.path.join(PYACME_HOME_PATH, domains[0], "cert.pem")
-    os.makedirs(os.path.dirname(cert_path), exist_ok=True)
-    with open(cert_path, "w") as f:
-        f.write(certificate_pem)
-
-    LOG.info(f"Certificate saved: {cert_path}")
-    LOG.info(f"Certificate private key saved: {domains[0]}/privkey.pem")
+    cert_path = install_certificate(domains[0], certificate_pem, cert_privkey)
+    LOG.info(f"Certificate and new private key saved: {cert_path}")
 
 
 def extract_domains_for_renewal(cert_data: dict, cert_dir: str) -> list[str]:
@@ -626,6 +675,7 @@ def get_certificate_for_domains_dns(
     renew_command: str,
     staging: bool = False,
     directory_url: str | None = None,
+    key_type: str = DEFAULT_KEY_TYPE,
 ) -> None:
     target_directory = get_directory_url(
         staging=staging, custom_url=directory_url
@@ -686,6 +736,7 @@ def get_certificate_for_domains_dns(
         order_data,
         domains,
         order_url,
+        key_type=key_type,
     )
 
     cert = SSLCertificate.from_pem(
@@ -699,6 +750,7 @@ def get_certificate_for_domains_dns(
     )
     cert.domains = domains
     cert.staging = staging
+    cert.key_type = key_type
 
     cert.save(f"{PYACME_HOME_PATH}/{domains[0]}/certificate.json")
 
@@ -803,6 +855,7 @@ def renew_certificate(
         order_data,
         ordered_domains,
         order_url,
+        key_type=cert_data.get("key_type", DEFAULT_KEY_TYPE),
     )
 
     cert_path = cert_data.get("certificate_path") or os.path.join(
@@ -911,9 +964,14 @@ def inspect_certificate(domain: str) -> dict[str, str]:
                     == pub_key.public_numbers()
                     else "No"
                 )
-            else:
-                key_type = "EC / Other"
-                key_matches = "Yes"
+            elif isinstance(priv_key, ec.EllipticCurvePrivateKey):
+                key_type = f"EC ({priv_key.curve.name})"
+                key_matches = (
+                    "Yes"
+                    if priv_key.public_key().public_numbers()
+                    == pub_key.public_numbers()
+                    else "No"
+                )
         except Exception:
             key_matches = "Error reading key"
 
