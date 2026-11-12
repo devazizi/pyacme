@@ -12,11 +12,12 @@ certificates, and renew certificates from cron.
 - Issue Let's Encrypt certificates with DNS-01 challenges.
 - Support wildcard domains such as `*.example.com`.
 - Support multiple names on one certificate.
-- Automatically create TXT records with Cloudflare, ArvanCloud, or AcmeDNS.
+- Native DNS providers: Cloudflare, ArvanCloud, DigitalOcean, Hetzner, PowerDNS, AWS Route 53, OVH, and AcmeDNS.
 - Support manual DNS TXT records when no provider integration is used.
 - Store certificates, private keys, account keys, and metadata under `~/.pyacme`.
 - Renew certificates automatically and run a custom command after renewal.
 - Show certificate status in a terminal table.
+- Certificate management tools: `inspect`, `export` (PEM / PFX), `revoke`, and `delete`.
 
 ## Supported Providers
 
@@ -24,6 +25,11 @@ certificates, and renew certificates from cron.
 | --- | --- | --- | --- |
 | Cloudflare | `cloudflare` | Yes | Uses the Cloudflare DNS API. |
 | ArvanCloud | `arvancloud` | Yes | Uses the ArvanCloud DNS API. |
+| DigitalOcean | `digitalocean` | Yes | Uses the DigitalOcean Domains API v2. |
+| Hetzner | `hetzner` | Yes | Supports both Hetzner Cloud DNS and Hetzner DNS API. |
+| PowerDNS | `powerdns` | Yes | Uses PowerDNS HTTP API (pass `server#key` or set `PDNS_SERVER`). |
+| Route 53 | `route53` | Optional | Uses `boto3` (pass `access_key#secret_key` or use AWS IAM/env). |
+| OVH | `ovh` | Yes | Supports OAuth2 token or `app_key#app_secret#consumer_key`. |
 | AcmeDNS | `acmedns` | No | First run asks you to create a CNAME record. |
 | Manual DNS | `dns` | No | Prints the TXT record and waits for you to add it. |
 
@@ -119,10 +125,12 @@ Options:
 | Option | Required | Description |
 | --- | --- | --- |
 | `--domain` | Yes | Domain name. Can be used multiple times. |
-| `--provider` | Yes | One of `cloudflare`, `arvancloud`, `acmedns`, or `dns`. |
+| `--provider` | Yes | One of `cloudflare`, `arvancloud`, `digitalocean`, `hetzner`, `powerdns`, `route53`, `ovh`, `acmedns`, or `dns`. |
 | `--email` | Yes | Email used for the Let's Encrypt account. |
-| `--access-token` | Cloudflare/ArvanCloud only | DNS provider API token. |
+| `--access-token` | When required | DNS provider API token or credential string. |
 | `--renew-command` | Yes | Shell command to run after successful renewal. |
+| `--staging` | No | Use Let's Encrypt Staging ACME directory to avoid rate limits. |
+| `--log-file` | No | Optional file path to write log output (without ANSI color codes). |
 
 ### `list`
 
@@ -135,6 +143,64 @@ python -m pyacmecli list
 The table includes the domain, certificate path, expiry date, status, renew
 command, and last renewal time.
 
+### `inspect`
+
+Inspects detailed information of a locally saved certificate (common name, SANs, serial number, issuer, validity window, days remaining, and private key match):
+
+```bash
+python -m pyacmecli inspect example.com
+```
+
+### `export`
+
+Exports the certificate and private key into a combined PEM bundle or PKCS#12 / PFX archive:
+
+```bash
+# Export as PEM bundle (cert.pem + privkey.pem)
+python -m pyacmecli export example.com --format pem-bundle -o ./bundle.pem
+
+# Export as encrypted PKCS#12 / PFX
+python -m pyacmecli export example.com --format pfx -p 'MySecretPassword' -o ./cert.pfx
+```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--output`, `-o` | No | Output file path (defaults to `./<domain>-bundle.pem` or `./<domain>-pfx`). |
+| `--format`, `-f` | No | Export format: `pem-bundle` (default), `pfx`, or `pkcs12`. |
+| `--password`, `-p` | No | Encryption password for PFX/PKCS#12 export. |
+
+### `revoke`
+
+Revokes an issued certificate on the Let's Encrypt / ACME server using the account private key and marks the local certificate status as revoked:
+
+```bash
+python -m pyacmecli revoke example.com --reason 0 --yes
+```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--reason` | No | Revocation reason code `0-10` (default: `0` = unspecified, `1` = keyCompromise, `4` = superseded, `5` = cessationOfOperation). |
+| `--staging` | No | Target Let's Encrypt Staging ACME directory. |
+| `--yes`, `-y` | No | Skip confirmation prompt. |
+
+### `delete`
+
+Safely removes certificate files and metadata for a domain from `~/.pyacme`:
+
+```bash
+python -m pyacmecli delete example.com --yes
+```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--yes`, `-y` | No | Skip confirmation prompt. |
+
 ### `cron`
 
 Renews certificates that expire within 30 days:
@@ -143,10 +209,10 @@ Renews certificates that expire within 30 days:
 python -m pyacmecli cron
 ```
 
-Run it from cron once per day:
+Run it from cron once per day (with optional file logging):
 
 ```cron
-0 2 * * * /path/to/venv/bin/python -m pyacmecli cron
+0 2 * * * /path/to/venv/bin/python -m pyacmecli cron --log-file /var/log/pyacme-cron.log
 ```
 
 To renew every certificate regardless of expiry date:
@@ -154,6 +220,14 @@ To renew every certificate regardless of expiry date:
 ```bash
 python -m pyacmecli cron --force-renewal
 ```
+
+Options:
+
+| Option | Required | Description |
+| --- | --- | --- |
+| `--force-renewal` | No | Force renewal certificates regardless of remaining days. |
+| `--staging` | No | Override renewal directory to Let's Encrypt Staging. |
+| `--log-file` | No | Optional file path to write log output. |
 
 ## Provider Examples
 
@@ -211,6 +285,71 @@ python -m pyacmecli new \
 
 PyACME prints the required `_acme-challenge` TXT record and waits until you add
 it to DNS.
+
+### DigitalOcean
+
+```bash
+python -m pyacmecli new \
+  --domain example.com \
+  --domain '*.example.com' \
+  --provider digitalocean \
+  --email admin@example.com \
+  --access-token 'digitalocean-api-token' \
+  --renew-command 'systemctl reload nginx'
+```
+
+### Hetzner
+
+Supports both Hetzner Cloud DNS and Hetzner DNS API:
+
+```bash
+python -m pyacmecli new \
+  --domain example.com \
+  --domain '*.example.com' \
+  --provider hetzner \
+  --email admin@example.com \
+  --access-token 'hetzner-api-token' \
+  --renew-command 'systemctl reload nginx'
+```
+
+### PowerDNS
+
+```bash
+python -m pyacmecli new \
+  --domain example.com \
+  --provider powerdns \
+  --email admin@example.com \
+  --access-token 'http://pdns.internal:8081#my-secret-key' \
+  --renew-command 'systemctl reload nginx'
+```
+
+### AWS Route 53
+
+Requires `boto3` (`pip install boto3`). Credentials can be passed via `--access-token 'KEY#SECRET'` or read automatically from AWS environment / IAM roles:
+
+```bash
+python -m pyacmecli new \
+  --domain example.com \
+  --domain '*.example.com' \
+  --provider route53 \
+  --email admin@example.com \
+  --access-token 'AWS_ACCESS_KEY#AWS_SECRET_KEY' \
+  --renew-command 'systemctl reload nginx'
+```
+
+### OVH
+
+Supports OAuth2 bearer token or `app_key#app_secret#consumer_key`:
+
+```bash
+python -m pyacmecli new \
+  --domain example.com \
+  --domain '*.example.com' \
+  --provider ovh \
+  --email admin@example.com \
+  --access-token 'oauth-bearer-token' \
+  --renew-command 'systemctl reload nginx'
+```
 
 ## Local Files
 

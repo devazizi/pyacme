@@ -9,6 +9,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
+from pyacmecli.common.fsutil import write_private_file
 from pyacmecli.happylog import LOG
 
 
@@ -81,8 +82,8 @@ class SSLCertificate:
             data["staging"] = self.staging
         if file_path is None:
             raise ValueError("File path must be provided to save.")
-        with open(file_path, "w") as f:
-            json.dump(data, f, indent=4)
+        # Holds the DNS provider credential (provider_conf).
+        write_private_file(file_path, json.dumps(data, indent=4))
         LOG.info(f"Certificate data saved to {file_path}")
 
     def needs_renewal(self) -> bool:

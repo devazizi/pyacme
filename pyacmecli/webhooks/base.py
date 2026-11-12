@@ -5,6 +5,8 @@ import os
 from abc import ABC, abstractmethod
 from typing import Any
 
+from pyacmecli.common.fsutil import write_private_file
+
 
 class Base(ABC):
     """Base class for DNS challenge providers (Cloudflare, ArvanCloud, AcmeDNS)."""
@@ -25,8 +27,9 @@ class Base(ABC):
     def save_config(self, config: dict[str, Any]) -> None:
         """Write provider config to cfg_dir/conf.json."""
         os.makedirs(os.path.dirname(self.cfg_dir), exist_ok=True)
-        with open(f"{self.cfg_dir}/conf.json", "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4)
+        write_private_file(
+            f"{self.cfg_dir}/conf.json", json.dumps(config, indent=4)
+        )
 
     @abstractmethod
     def add_txt_record(self, name: str, content: str, ttl: int = 120) -> None:

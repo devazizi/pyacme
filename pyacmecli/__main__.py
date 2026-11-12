@@ -6,13 +6,17 @@ from datetime import datetime, timedelta, timezone
 
 import click
 from tabulate import tabulate
-from validators import domain as domain_validator
 
 from pyacmecli.acme.helper import (
     PYACME_HOME_PATH,
+    delete_certificate_data,
+    export_certificate,
     get_certificate_for_domains_dns,
     init_dir,
+    inspect_certificate,
     renew_certificate,
+    revoke_certificate,
+    validate_domain_name,
 )
 from pyacmecli.common.certificates import get_certificate_list
 from pyacmecli.happylog import (
@@ -22,7 +26,25 @@ from pyacmecli.happylog import (
     set_verbosity,
 )
 
-SUPPORTABLE_PROVIDER = ("arvancloud", "cloudflare", "acmedns", "dns")
+SUPPORTABLE_PROVIDER = (
+    "arvancloud",
+    "cloudflare",
+    "acmedns",
+    "dns",
+    "digitalocean",
+    "hetzner",
+    "powerdns",
+    "route53",
+    "ovh",
+)
+TOKEN_REQUIRED_PROVIDERS = (
+    "arvancloud",
+    "cloudflare",
+    "digitalocean",
+    "hetzner",
+    "powerdns",
+    "ovh",
+)
 ARVANCLOUD = "arvancloud"
 CLOUDFLARE = "cloudflare"
 
@@ -153,6 +175,141 @@ def certificate_list(ctx: click.Context) -> None:
     )
 
 
+@main_command.command(
+    name="inspect", help="Inspect certificate details for a domain"
+)
+@click.argument("domain")
+@click.pass_context
+def certificate_inspect(ctx: click.Context, domain: str) -> None:
+    """Inspect detailed information of a locally stored certificate."""
+    try:
+        details = inspect_certificate(domain)
+        table_rows = [(k, v) for k, v in details.items()]
+        click.echo(
+            tabulate(
+                table_rows, headers=["Property", "Value"], tablefmt="fancy_grid"
+            )
+        )
+    except Exception as exc:
+        raise click.ClickException(str(exc))
+
+
+@main_command.command(
+    name="delete", help="Delete certificate data for a domain"
+)
+@click.argument("domain")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+@click.pass_context
+def certificate_delete(
+    ctx: click.Context, domain: str, yes: bool = False
+) -> None:
+    """Safely delete certificate data for a domain from ~/.pyacme."""
+    if not yes:
+        click.confirm(
+            f"Are you sure you want to permanently delete certificate data for '{domain}'?",
+            abort=True,
+        )
+    try:
+        deleted = delete_certificate_data(domain)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    if deleted:
+        click.echo(f"Successfully deleted certificate data for '{domain}'.")
+    else:
+        click.echo(f"No certificate data found for '{domain}'.")
+
+
+@main_command.command(
+    name="export",
+    help="Export certificate bundle (PEM bundle or PKCS#12/PFX)",
+)
+@click.argument("domain")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False, writable=True),
+    required=False,
+    help="Output file path.",
+)
+@click.option(
+    "--format",
+    "-f",
+    "export_format",
+    type=click.Choice(["pem-bundle", "pfx", "pkcs12"], case_sensitive=False),
+    default="pem-bundle",
+    help="Export format: pem-bundle (cert+key) or pfx/pkcs12.",
+)
+@click.option(
+    "--password",
+    "-p",
+    default=None,
+    help="Optional encryption password for PFX/PKCS#12 export.",
+)
+@click.pass_context
+def certificate_export(
+    ctx: click.Context,
+    domain: str,
+    output: str | None,
+    export_format: str,
+    password: str | None,
+) -> None:
+    """Export certificate and private key to a bundle file."""
+    if output is None:
+        ext = "pfx" if export_format in ("pfx", "pkcs12") else "bundle.pem"
+        output = f"./{domain}-{ext}"
+    try:
+        exported_path = export_certificate(
+            domain, output, export_format=export_format, password=password
+        )
+        click.echo(f"Certificate exported successfully to: {exported_path}")
+    except Exception as exc:
+        raise click.ClickException(str(exc))
+
+
+@main_command.command(
+    name="revoke",
+    help="Revoke an issued certificate with Let's Encrypt",
+)
+@click.argument("domain")
+@click.option(
+    "--reason",
+    type=click.IntRange(0, 10),
+    default=0,
+    help="Revocation reason code (0=unspecified, 1=keyCompromise, 4=superseded, 5=cessationOfOperation).",
+)
+@click.option(
+    "--staging",
+    is_flag=True,
+    default=None,
+    help="Use Let's Encrypt Staging ACME directory.",
+)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+@click.pass_context
+def certificate_revoke(
+    ctx: click.Context,
+    domain: str,
+    reason: int = 0,
+    staging: bool | None = None,
+    yes: bool = False,
+) -> None:
+    """Revoke an issued certificate from the ACME server."""
+    if not yes:
+        click.confirm(
+            f"Are you sure you want to revoke the certificate for '{domain}'?",
+            abort=True,
+        )
+    effective_staging = (
+        staging
+        if staging is not None
+        else (True if (ctx.obj or {}).get("STAGING") else None)
+    )
+    try:
+        revoke_certificate(domain, reason=reason, staging=effective_staging)
+        click.echo(f"Certificate for '{domain}' has been revoked.")
+    except Exception as exc:
+        raise click.ClickException(str(exc))
+
+
 @main_command.command(name="cron", help="Renew certificate")
 @click.option(
     "--force-renewal", is_flag=True, help="Force renewal certificates"
@@ -228,13 +385,15 @@ def certificate_renew(
 )
 @click.option(
     "--provider",
-    help="provider name if has special provider to set it dns, acmedns, arvancloud, "
-    "cloudflare",
+    help=(
+        "DNS provider name: arvancloud, cloudflare, acmedns, dns, "
+        "digitalocean, hetzner, powerdns, route53, ovh"
+    ),
     required=True,
 )
 @click.option(
     "--access-token",
-    help="ArvanCloud or Cloudflare access token",
+    help="Provider API token, key, or credentials string",
     required=False,
 )
 @click.option("--email", help="Email address", required=True)
@@ -276,20 +435,19 @@ def certificate_new(
     )
 
     for _domain in domain:
-        domain_validator(_domain)
+        try:
+            validate_domain_name(_domain)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
 
     if provider not in SUPPORTABLE_PROVIDER:
         raise click.ClickException(
             f"Invalid provider, valid providers {SUPPORTABLE_PROVIDER}"
         )
 
-    if provider == ARVANCLOUD and access_token is None:
+    if provider in TOKEN_REQUIRED_PROVIDERS and access_token is None:
         raise click.ClickException(
-            "--access-token required when provider is arvancloud"
-        )
-    if provider == CLOUDFLARE and access_token is None:
-        raise click.ClickException(
-            "--access-token required when provider is cloudflare"
+            f"--access-token required when provider is {provider}"
         )
 
     get_certificate_for_domains_dns(

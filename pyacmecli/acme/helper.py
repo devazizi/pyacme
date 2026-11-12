@@ -15,13 +15,20 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509 import NameOID
+from validators import domain as domain_validator
 
+from pyacmecli.common.fsutil import write_private_file
 from pyacmecli.happylog import LOG
 from pyacmecli.tls.ssl_object import SSLCertificate
 from pyacmecli.webhooks.acmedns import AcmeDNS
 from pyacmecli.webhooks.arvancloud import ArvanCloud
 from pyacmecli.webhooks.base import Base
 from pyacmecli.webhooks.cloudflare import Cloudflare
+from pyacmecli.webhooks.digitalocean import DigitalOcean
+from pyacmecli.webhooks.hetzner import Hetzner
+from pyacmecli.webhooks.ovh import OVH
+from pyacmecli.webhooks.powerdns import PowerDNS
+from pyacmecli.webhooks.route53 import Route53
 
 PYACME_HOME_PATH = os.path.expanduser("~/.pyacme")
 LETSENCRYPT_PRODUCTION_DIRECTORY = (
@@ -45,6 +52,23 @@ def get_directory_url(
         if staging
         else LETSENCRYPT_PRODUCTION_DIRECTORY
     )
+
+
+def validate_domain_name(name: str) -> str:
+    """Return name if it is a DNS name (a leading '*.' is allowed).
+
+    Domain names are used as directory names under PYACME_HOME_PATH, so this
+    is also what keeps '..', absolute paths and empty names out of file paths.
+    """
+    candidate = name[2:] if name.startswith("*.") else name
+    if not domain_validator(candidate):
+        raise ValueError(f"Invalid domain name: {name!r}")
+    return name
+
+
+def certificate_dir(domain: str) -> str:
+    """Return the storage directory of a certificate, rejecting unsafe names."""
+    return os.path.join(PYACME_HOME_PATH, validate_domain_name(domain))
 
 
 def create_acme_account(
@@ -133,8 +157,7 @@ def load_or_make_rsa_key(
         encryption_algorithm=serialization.NoEncryption(),
     )
 
-    with open(path, "wb") as f:
-        f.write(pem)
+    write_private_file(path, pem)
 
     LOG.info(f"Generated new RSA key: {path}")
     return key
@@ -303,8 +326,18 @@ def dns_challenge_provider(
         return ArvanCloud(domain, access_token)
     elif provider_name == "acmedns":
         return AcmeDNS(domain, cfg_dir)
+    elif provider_name == "digitalocean":
+        return DigitalOcean(domain, access_token or "")
+    elif provider_name == "hetzner":
+        return Hetzner(domain, access_token or "")
+    elif provider_name == "powerdns":
+        return PowerDNS(domain, access_token or "")
+    elif provider_name == "route53":
+        return Route53(domain, access_token)
+    elif provider_name == "ovh":
+        return OVH(domain, access_token or "")
     else:
-        raise RuntimeError("Invalid provider")
+        raise RuntimeError(f"Invalid provider: {provider_name}")
 
 
 def perform_dns_challenge(
@@ -760,9 +793,244 @@ def renew_certificate(
     if is_staging:
         cert_data["staging"] = True
 
-    with open(cert_json_path, "w", encoding="utf-8") as f:
-        json.dump(cert_data, f, indent=4)
+    write_private_file(cert_json_path, json.dumps(cert_data, indent=4))
 
     LOG.info(
         f"Renewal successful for {primary_domain} (domains: {ordered_domains})"
     )
+
+
+def inspect_certificate(domain: str) -> dict[str, str]:
+    """Inspect detailed information of a locally stored certificate."""
+    domain_dir = certificate_dir(domain)
+    cert_path = os.path.join(domain_dir, "cert.pem")
+    key_path = os.path.join(domain_dir, "privkey.pem")
+    json_path = os.path.join(domain_dir, "certificate.json")
+
+    if not os.path.exists(cert_path):
+        raise FileNotFoundError(f"Certificate not found for domain: {domain}")
+
+    with open(cert_path, "rb") as f:
+        cert_data = f.read()
+
+    cert = x509.load_pem_x509_certificate(cert_data, default_backend())
+
+    try:
+        cn = str(
+            cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        )
+    except IndexError:
+        cn = "N/A"
+
+    try:
+        san_ext = cert.extensions.get_extension_for_oid(
+            x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+        )
+        sans = san_ext.value.get_values_for_type(x509.DNSName)
+    except Exception:
+        sans = []
+
+    try:
+        issuer = str(
+            cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)[
+                0
+            ].value
+        )
+    except IndexError:
+        try:
+            issuer = str(
+                cert.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+            )
+        except IndexError:
+            issuer = "Unknown"
+
+    now = datetime.now(timezone.utc)
+    valid_from = cert.not_valid_before_utc
+    valid_to = cert.not_valid_after_utc
+    days_left = (valid_to - now).days
+
+    meta = {}
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as jf:
+                meta = json.load(jf)
+        except Exception:
+            pass
+
+    status_str = meta.get("status", "valid" if now <= valid_to else "expired")
+
+    key_type = "Unknown"
+    key_matches = "Unknown"
+    if os.path.exists(key_path):
+        try:
+            with open(key_path, "rb") as kf:
+                k_data = kf.read()
+            priv_key = serialization.load_pem_private_key(
+                k_data, password=None, backend=default_backend()
+            )
+            pub_key = cert.public_key()
+            if isinstance(priv_key, rsa.RSAPrivateKey):
+                key_type = f"RSA ({priv_key.key_size} bit)"
+                key_matches = (
+                    "Yes"
+                    if priv_key.public_key().public_numbers()
+                    == pub_key.public_numbers()
+                    else "No"
+                )
+            else:
+                key_type = "EC / Other"
+                key_matches = "Yes"
+        except Exception:
+            key_matches = "Error reading key"
+
+    return {
+        "Domain": domain,
+        "Common Name": cn,
+        "SANs": ", ".join(sans) if sans else cn,
+        "Issuer": issuer,
+        "Serial Number": f"{cert.serial_number:X}",
+        "Valid From": valid_from.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "Valid Until": valid_to.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "Days Remaining": f"{days_left} days",
+        "Status": status_str,
+        "Key Type": key_type,
+        "Private Key Match": key_matches,
+        "Provider": meta.get("provider", "N/A"),
+        "Staging": "Yes" if meta.get("staging") else "No",
+        "Renew Command": meta.get("renew_command", "N/A"),
+        "Last Renewed": meta.get("last_renewed", "N/A"),
+    }
+
+
+def export_certificate(
+    domain: str,
+    output_path: str,
+    export_format: str = "pem-bundle",
+    password: str | None = None,
+) -> str:
+    """Export certificate and key as a PEM bundle or PKCS#12 (PFX)."""
+    domain_dir = certificate_dir(domain)
+    cert_path = os.path.join(domain_dir, "cert.pem")
+    key_path = os.path.join(domain_dir, "privkey.pem")
+
+    if not os.path.exists(cert_path) or not os.path.exists(key_path):
+        raise FileNotFoundError(
+            f"Certificate or private key not found for domain: {domain}"
+        )
+
+    with open(cert_path, "rb") as f:
+        cert_bytes = f.read()
+    with open(key_path, "rb") as f:
+        key_bytes = f.read()
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    if export_format == "pem-bundle":
+        bundle = cert_bytes.strip() + b"\n\n" + key_bytes.strip() + b"\n"
+        write_private_file(output_path, bundle)
+    elif export_format in ("pfx", "pkcs12"):
+        from cryptography.hazmat.primitives.serialization import pkcs12
+
+        cert = x509.load_pem_x509_certificate(cert_bytes, default_backend())
+        key = serialization.load_pem_private_key(
+            key_bytes, password=None, backend=default_backend()
+        )
+        encryption = (
+            serialization.BestAvailableEncryption(password.encode("utf-8"))
+            if password
+            else serialization.NoEncryption()
+        )
+        pfx_bytes = pkcs12.serialize_key_and_certificates(
+            name=domain.encode("utf-8"),
+            key=key,
+            cert=cert,
+            cas=None,
+            encryption_algorithm=encryption,
+        )
+        write_private_file(output_path, pfx_bytes)
+    else:
+        raise ValueError(
+            f"Unsupported format: {export_format}. Choose 'pem-bundle' or 'pfx'."
+        )
+
+    return output_path
+
+
+def delete_certificate_data(domain: str) -> bool:
+    """Safely delete certificate directory from ~/.pyacme."""
+    import shutil
+
+    domain_dir = certificate_dir(domain)
+    if not os.path.exists(domain_dir):
+        return False
+    shutil.rmtree(domain_dir)
+    return True
+
+
+def revoke_certificate(
+    domain: str,
+    reason: int = 0,
+    staging: bool | None = None,
+) -> None:
+    """Revoke a certificate using the ACME revokeCert endpoint."""
+    domain_dir = certificate_dir(domain)
+    cert_path = os.path.join(domain_dir, "cert.pem")
+    cert_json_path = os.path.join(domain_dir, "certificate.json")
+
+    if not os.path.exists(cert_path):
+        raise FileNotFoundError(f"Certificate not found at {cert_path}")
+
+    with open(cert_path, "rb") as f:
+        cert_pem = f.read()
+
+    cert_obj = x509.load_pem_x509_certificate(cert_pem, default_backend())
+    cert_der = cert_obj.public_bytes(serialization.Encoding.DER)
+
+    is_staging = False
+    if staging is not None:
+        is_staging = staging
+    elif os.path.exists(cert_json_path):
+        try:
+            with open(cert_json_path, "r", encoding="utf-8") as jf:
+                cdata = json.load(jf)
+            is_staging = cdata.get("staging", False)
+        except Exception:
+            pass
+
+    target_directory = get_directory_url(staging=is_staging)
+    session = requests.Session()
+    directory = get_directory(session, target_directory)
+    revoke_url = directory.get("revokeCert")
+    if not revoke_url:
+        raise RuntimeError("Directory does not specify revokeCert endpoint")
+
+    new_nonce_url = directory["newNonce"]
+    privkey = load_or_make_rsa_key(file_name=f"{domain}/account.key.pem")
+    account_url = account_directory_url(domain)
+
+    payload = {
+        "certificate": b64u(cert_der),
+        "reason": reason,
+    }
+
+    resp = post_jws(
+        session,
+        revoke_url,
+        payload,
+        privkey,
+        new_nonce_url,
+        kid=account_url,
+    )
+    if resp.status_code not in (200, 201, 204):
+        resp.raise_for_status()
+
+    if os.path.exists(cert_json_path):
+        try:
+            with open(cert_json_path, "r", encoding="utf-8") as jf:
+                cdata = json.load(jf)
+            cdata["status"] = "revoked"
+            write_private_file(cert_json_path, json.dumps(cdata, indent=4))
+        except Exception:
+            pass
+
+    LOG.info(f"Certificate for {domain} has been successfully revoked.")
