@@ -263,15 +263,25 @@ def test_cli_init_and_list_command(runner, temp_pyacme_home):
 def test_run_renew_command_as_subprocess_command():
     """Verify subprocess execution and error resilience."""
     with patch("subprocess.run") as mock_sub:
-        run_renew_command_as_subprocess_command("echo hello")
-        mock_sub.assert_called_once_with(
-            "echo hello",
-            shell=True,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        run_renew_command_as_subprocess_command(
+            "echo hello", env={"PYACME_DOMAIN": "example.com"}
         )
+        mock_sub.assert_called_once()
+        args, kwargs = mock_sub.call_args
+        # Compare only chosen keys: a failing assert_called_with would print
+        # the whole inherited environment, secrets included.
+        env = kwargs.pop("env")
+        assert args == ("echo hello",)
+        assert kwargs == {
+            "shell": True,
+            "check": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "timeout": 600,
+        }
+        assert env["PYACME_DOMAIN"] == "example.com"
+        assert "PATH" in env
 
     # Verify exception is caught and logged
     with patch(

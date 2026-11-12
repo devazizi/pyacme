@@ -1,6 +1,7 @@
 """CLI entrypoint for pyacme - ACME/Let's Encrypt certificate management."""
 
 import functools
+import json
 import os
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -24,7 +25,11 @@ from pyacmecli.acme.helper import (
     validate_domain_name,
 )
 from pyacmecli.common.certificates import get_certificate_list
-from pyacmecli.common.fsutil import LockBusyError
+from pyacmecli.common.fsutil import (
+    PUBLIC_FILE_MODE,
+    LockBusyError,
+    write_atomic,
+)
 from pyacmecli.happylog import (
     LOG,
     set_log_file,
@@ -83,8 +88,30 @@ def locked(func):
     return wrapper
 
 
-def run_renew_command_as_subprocess_command(renew_command: str | None) -> bool:
-    """Run the post-renewal command; return False only if it exited non-zero."""
+RENEW_COMMAND_TIMEOUT = 600
+
+
+def renew_command_env(cert) -> dict[str, str]:
+    """Variables that tell a renew command which certificate changed."""
+    cert_dir = os.path.dirname(cert.certificate_path)
+    return {
+        "PYACME_DOMAIN": cert.domain,
+        "PYACME_CERT_DIR": cert_dir,
+        "PYACME_CERT_PATH": cert.certificate_path,
+        "PYACME_KEY_PATH": os.path.join(cert_dir, "privkey.pem"),
+    }
+
+
+def run_renew_command_as_subprocess_command(
+    renew_command: str | None,
+    env: dict[str, str] | None = None,
+    timeout: int = RENEW_COMMAND_TIMEOUT,
+) -> bool:
+    """Run the post-renewal command; return False if it failed or hung.
+
+    env is added to the inherited environment so the command can tell
+    which certificate it is reloading.
+    """
     if renew_command and renew_command.strip():
         try:
             LOG.info(f"Running renew command: {renew_command}")
@@ -95,12 +122,61 @@ def run_renew_command_as_subprocess_command(renew_command: str | None) -> bool:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env={**os.environ, **(env or {})},
+                timeout=timeout,
             )
             LOG.info("Renew command executed successfully.")
         except subprocess.CalledProcessError as e:
             LOG.error(f"Renew command failed: {e.stderr.strip()}")
             return False
+        except subprocess.TimeoutExpired:
+            LOG.error(f"Renew command timed out after {timeout}s")
+            return False
     return True
+
+
+def _metric_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def write_metrics_file(
+    path: str, base_dir: str, failed_domains: set[str], now: datetime
+) -> None:
+    """Write a Prometheus textfile-collector file describing the last run."""
+    lines = [
+        "# HELP pyacme_certificate_expiry_timestamp_seconds Certificate "
+        "notAfter as a Unix timestamp.",
+        "# TYPE pyacme_certificate_expiry_timestamp_seconds gauge",
+    ]
+    certificates = get_certificate_list(base_dir)
+    for cert in certificates:
+        try:
+            expiry = datetime.fromisoformat(
+                cert.expiry_date.replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError:
+            continue
+        lines.append(
+            "pyacme_certificate_expiry_timestamp_seconds"
+            f'{{domain="{_metric_label(cert.domain)}"}} {expiry:.0f}'
+        )
+    lines += [
+        "# HELP pyacme_renewal_failed 1 if the last cron run failed to renew "
+        "the certificate or run its renew command.",
+        "# TYPE pyacme_renewal_failed gauge",
+    ]
+    for cert in certificates:
+        failed = 1 if cert.domain in failed_domains else 0
+        lines.append(
+            f'pyacme_renewal_failed{{domain="{_metric_label(cert.domain)}"}} '
+            f"{failed}"
+        )
+    lines += [
+        "# HELP pyacme_cron_last_run_timestamp_seconds When cron last ran.",
+        "# TYPE pyacme_cron_last_run_timestamp_seconds gauge",
+        f"pyacme_cron_last_run_timestamp_seconds {now.timestamp():.0f}",
+    ]
+    write_atomic(path, "\n".join(lines) + "\n", PUBLIC_FILE_MODE)
 
 
 @click.group(
@@ -137,6 +213,15 @@ def run_renew_command_as_subprocess_command(renew_command: str | None) -> bool:
     default=False,
     help="Use Let's Encrypt Staging ACME directory.",
 )
+@click.option(
+    "--directory-url",
+    envvar="PYACME_DIRECTORY_URL",
+    default=None,
+    help=(
+        "ACME directory URL of another CA (e.g. step-ca, Pebble). Stored "
+        "with new certificates and reused on renewal. Overrides --staging."
+    ),
+)
 @click.pass_context
 def main_command(
     ctx: click.Context,
@@ -144,12 +229,14 @@ def main_command(
     log_level: str | None = None,
     log_file: str | None = None,
     staging: bool = False,
+    directory_url: str | None = None,
 ) -> None:
     """Root CLI group; sets verbosity, log level, log file, and staging."""
     ctx.ensure_object(dict)
     ctx.obj["VERBOSE"] = verbose
     ctx.obj["LOG_FILE"] = log_file
     ctx.obj["STAGING"] = staging
+    ctx.obj["DIRECTORY_URL"] = directory_url
 
     if log_file:
         set_log_file(log_file)
@@ -175,16 +262,28 @@ def init_pyacme_project(ctx: click.Context) -> None:
 
 
 @main_command.command(name="list", help="List of certificates")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Print a JSON array instead of a table.",
+)
 @click.pass_context
-def certificate_list(ctx: click.Context) -> None:
+def certificate_list(ctx: click.Context, as_json: bool = False) -> None:
     """List all certificates in the pyacme home directory."""
     base_dir = os.path.expanduser(PYACME_HOME_PATH)
 
     if not os.path.exists(base_dir):
+        if as_json:
+            click.echo("[]")
+            return
         click.echo(f"Directory {base_dir} does not exist.")
         return
 
     certificates = get_certificate_list(base_dir)
+    if as_json:
+        click.echo(json.dumps([c._asdict() for c in certificates], indent=2))
+        return
     rows = [
         (
             c.id,
@@ -333,7 +432,12 @@ def certificate_revoke(
         else (True if (ctx.obj or {}).get("STAGING") else None)
     )
     try:
-        revoke_certificate(domain, reason=reason, staging=effective_staging)
+        revoke_certificate(
+            domain,
+            reason=reason,
+            staging=effective_staging,
+            directory_url=(ctx.obj or {}).get("DIRECTORY_URL"),
+        )
         click.echo(f"Certificate for '{domain}' has been revoked.")
     except Exception as exc:
         raise click.ClickException(str(exc))
@@ -356,6 +460,15 @@ def certificate_revoke(
     help="Optional file path to write log output.",
 )
 @click.option(
+    "--metrics-file",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help=(
+        "Write certificate expiry and renewal status in Prometheus "
+        "textfile-collector format to this path."
+    ),
+)
+@click.option(
     "--renew-before-days",
     type=click.IntRange(1, 365),
     default=None,
@@ -371,6 +484,7 @@ def certificate_renew(
     force_renewal: bool = False,
     staging: bool | None = None,
     log_file: str | None = None,
+    metrics_file: str | None = None,
     renew_before_days: int | None = None,
 ) -> None:
     """Renew certificates that are due, or all with --force-renewal.
@@ -395,8 +509,10 @@ def certificate_renew(
 
     now = datetime.now(timezone.utc)
 
+    directory_url = (ctx.obj or {}).get("DIRECTORY_URL")
     certificates = get_certificate_list(base_dir)
     failed: list[str] = []
+    failed_domains: set[str] = set()
     for cert in certificates:
         cert_json_path = cert.certificate_path.replace(
             "/cert.pem", "/certificate.json"
@@ -430,16 +546,30 @@ def certificate_renew(
                     )
                     continue
                 LOG.info(f"Start renewing certificate {cert.domain}")
-            renew_certificate(cert_json_path, staging=effective_staging)
+            renew_kwargs = {"staging": effective_staging}
+            if directory_url:
+                renew_kwargs["directory_url"] = directory_url
+            renew_certificate(cert_json_path, **renew_kwargs)
         except Exception as exc:
             LOG.error(
                 f"Renewal failed for {cert.domain}: {type(exc).__name__}: {exc}"
             )
             failed.append(cert.domain)
+            failed_domains.add(cert.domain)
             continue
 
-        if not run_renew_command_as_subprocess_command(cert.renew_command):
+        if not run_renew_command_as_subprocess_command(
+            cert.renew_command, env=renew_command_env(cert)
+        ):
             failed.append(f"{cert.domain} (renew command)")
+            failed_domains.add(cert.domain)
+
+    if metrics_file:
+        try:
+            write_metrics_file(metrics_file, base_dir, failed_domains, now)
+        except OSError as exc:
+            LOG.error(f"Could not write metrics file {metrics_file}: {exc}")
+            failed.append(f"metrics file {metrics_file}")
 
     if failed:
         raise click.ClickException(
@@ -538,6 +668,7 @@ def certificate_new(
         access_token,
         renew_command,
         staging=effective_staging,
+        directory_url=(ctx.obj or {}).get("DIRECTORY_URL"),
         key_type=key_type,
     )
 

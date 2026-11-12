@@ -898,6 +898,7 @@ def get_certificate_for_domains_dns(
     cert.domains = domains
     cert.staging = staging
     cert.key_type = key_type
+    cert.directory_url = directory_url
 
     cert.save(f"{PYACME_HOME_PATH}/{domains[0]}/certificate.json")
 
@@ -955,7 +956,8 @@ def renew_certificate(
 
     is_staging = cert_data.get("staging", False) if staging is None else staging
     target_directory = get_directory_url(
-        staging=is_staging, custom_url=directory_url
+        staging=is_staging,
+        custom_url=directory_url or cert_data.get("directory_url"),
     )
 
     session = requests.Session()
@@ -1210,6 +1212,7 @@ def revoke_certificate(
     domain: str,
     reason: int = 0,
     staging: bool | None = None,
+    directory_url: str | None = None,
 ) -> None:
     """Revoke a certificate using the ACME revokeCert endpoint."""
     domain_dir = certificate_dir(domain)
@@ -1225,18 +1228,19 @@ def revoke_certificate(
     cert_obj = x509.load_pem_x509_certificate(cert_pem, default_backend())
     cert_der = cert_obj.public_bytes(serialization.Encoding.DER)
 
-    is_staging = False
-    if staging is not None:
-        is_staging = staging
-    elif os.path.exists(cert_json_path):
+    cdata = {}
+    if os.path.exists(cert_json_path):
         try:
             with open(cert_json_path, "r", encoding="utf-8") as jf:
                 cdata = json.load(jf)
-            is_staging = cdata.get("staging", False)
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            LOG.warning(f"Could not read {cert_json_path}: {exc}")
+    is_staging = cdata.get("staging", False) if staging is None else staging
 
-    target_directory = get_directory_url(staging=is_staging)
+    target_directory = get_directory_url(
+        staging=is_staging,
+        custom_url=directory_url or cdata.get("directory_url"),
+    )
     session = requests.Session()
     directory = get_directory(session, target_directory)
     revoke_url = directory.get("revokeCert")
