@@ -221,6 +221,11 @@ To renew every certificate regardless of expiry date:
 python -m pyacmecli cron --force-renewal
 ```
 
+A failed renewal or a failing renew command does not stop the run: the
+remaining certificates are still processed, each failure is logged, and `cron`
+exits with a non-zero status listing the failed domains. Polling the CA for a
+challenge or order result gives up after 5 minutes.
+
 Options:
 
 | Option | Required | Description |

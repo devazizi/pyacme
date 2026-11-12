@@ -40,6 +40,12 @@ LETSENCRYPT_STAGING_DIRECTORY = (
 DEFAULT_DIRECTORY_URL = LETSENCRYPT_PRODUCTION_DIRECTORY
 DIRECTORY_ADDRESS = DEFAULT_DIRECTORY_URL
 
+# Upper bound for polling the CA after a challenge or finalize request.
+ACME_POLL_INTERVAL = 2
+ACME_POLL_ATTEMPTS = 150  # 150 * 2s = 5 minutes
+# RFC 8555 7.1.6: none of these authorization states can become valid.
+AUTHZ_FAILED_STATES = ("invalid", "deactivated", "expired", "revoked")
+
 
 def get_directory_url(
     staging: bool = False, custom_url: str | None = None
@@ -395,14 +401,28 @@ def perform_dns_challenge(
         session, challenge_url, {}, privkey, new_nonce_url, kid=account_url
     )
 
-    while True:
-        time.sleep(2)
+    for _ in range(ACME_POLL_ATTEMPTS):
+        time.sleep(ACME_POLL_INTERVAL)
         resp = session.get(authz_url, timeout=10)
-        status = resp.json()["status"]
+        resp.raise_for_status()
+        authz = resp.json()
+        status = authz["status"]
         if status == "valid":
-            break
-        elif status == "invalid":
-            LOG.warning("Already Invalid try to validate again")
+            return
+        if status in AUTHZ_FAILED_STATES:
+            errors = [
+                c["error"]
+                for c in authz.get("challenges", [])
+                if c.get("type") == "dns-01" and c.get("error")
+            ]
+            raise RuntimeError(
+                f"Authorization for {domain} is {status}: {errors or authz}"
+            )
+
+    raise TimeoutError(
+        f"Authorization for {domain} still '{status}' after "
+        f"{ACME_POLL_ATTEMPTS * ACME_POLL_INTERVAL}s"
+    )
 
 
 def wait_for_dns(
@@ -508,8 +528,8 @@ def finalize_order(
     if not order_url:
         raise RuntimeError("Missing order URL after finalization")
 
-    while True:
-        time.sleep(2)
+    for _ in range(ACME_POLL_ATTEMPTS):
+        time.sleep(ACME_POLL_INTERVAL)
         resp = post_jws(
             session, order_url, None, privkey, new_nonce_url, kid=account_url
         )
@@ -518,7 +538,12 @@ def finalize_order(
         if status == "valid":
             break
         elif status == "invalid":
-            raise RuntimeError("Order finalization failed")
+            raise RuntimeError(f"Order finalization failed: {resp.json()}")
+    else:
+        raise TimeoutError(
+            f"Order {order_url} still '{status}' after "
+            f"{ACME_POLL_ATTEMPTS * ACME_POLL_INTERVAL}s"
+        )
 
     cert_url = resp.json()["certificate"]
     if not cert_url:

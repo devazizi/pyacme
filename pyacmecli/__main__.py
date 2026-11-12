@@ -59,7 +59,8 @@ CERTIFICATE_TABLE_HEADERS = [
 ]
 
 
-def run_renew_command_as_subprocess_command(renew_command: str | None) -> None:
+def run_renew_command_as_subprocess_command(renew_command: str | None) -> bool:
+    """Run the post-renewal command; return False only if it exited non-zero."""
     if renew_command and renew_command.strip():
         try:
             LOG.info(f"Running renew command: {renew_command}")
@@ -74,6 +75,8 @@ def run_renew_command_as_subprocess_command(renew_command: str | None) -> None:
             LOG.info("Renew command executed successfully.")
         except subprocess.CalledProcessError as e:
             LOG.error(f"Renew command failed: {e.stderr.strip()}")
+            return False
+    return True
 
 
 @click.group(
@@ -354,26 +357,42 @@ def certificate_renew(
     one_month_later = now + timedelta(days=30)
 
     certificates = get_certificate_list(base_dir)
+    failed: list[str] = []
     for cert in certificates:
         cert_json_path = cert.certificate_path.replace(
             "/cert.pem", "/certificate.json"
         )
-        if not force_renewal:
-            target_time = datetime.fromisoformat(
-                cert.expiry_date.replace("Z", "+00:00")
-            )
-            if target_time <= one_month_later:
-                LOG.info(f"Start renewing certificate {cert.domain}")
-                renew_certificate(cert_json_path, staging=effective_staging)
-                run_renew_command_as_subprocess_command(cert.renew_command)
+        # One broken certificate must not block renewal of the others, so
+        # every failure is recorded here and reported once at the end.
+        try:
+            if force_renewal:
+                LOG.warning(f"Force renewing certificate {cert.domain}")
             else:
-                LOG.info(
-                    f"Target certificate {cert.domain} is more than 30 days away"
+                target_time = datetime.fromisoformat(
+                    cert.expiry_date.replace("Z", "+00:00")
                 )
-        else:
-            LOG.warning("Force renewing certificates")
+                if target_time > one_month_later:
+                    LOG.info(
+                        f"Target certificate {cert.domain} is more than 30 days away"
+                    )
+                    continue
+                LOG.info(f"Start renewing certificate {cert.domain}")
             renew_certificate(cert_json_path, staging=effective_staging)
-            run_renew_command_as_subprocess_command(cert.renew_command)
+        except Exception as exc:
+            LOG.error(
+                f"Renewal failed for {cert.domain}: {type(exc).__name__}: {exc}"
+            )
+            failed.append(cert.domain)
+            continue
+
+        if not run_renew_command_as_subprocess_command(cert.renew_command):
+            failed.append(f"{cert.domain} (renew command)")
+
+    if failed:
+        raise click.ClickException(
+            f"{len(failed)} of {len(certificates)} certificate(s) failed: "
+            + ", ".join(failed)
+        )
 
 
 @main_command.command(name="new", help="Get new certificate")
