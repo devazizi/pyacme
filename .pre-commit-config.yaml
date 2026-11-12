@@ -10,3 +10,13 @@ repos:
       - id: ruff-check
       # Run the formatter.
       - id: ruff-format
+  - repo: local
+    hooks:
+      # Runs in the project environment (uv sync) so mypy sees the real
+      # dependencies and stubs instead of a separate hook virtualenv.
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run --frozen mypy
+        language: system
+        types: [python]
+        pass_filenames: false

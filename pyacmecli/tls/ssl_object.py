@@ -23,9 +23,9 @@ class SSLCertificate:
         renew_before_days: int,
         last_renewed: str,
         renew_command: str,
-        status: str,
+        status: str | list[str] | tuple[str, ...],
         provider: str,
-        provider_conf: str,
+        provider_conf: Optional[str],
         email: str,
         domains: Optional[list[str]] = None,
         staging: bool = False,
@@ -33,8 +33,8 @@ class SSLCertificate:
         directory_url: Optional[str] = None,
         account: Optional[str] = None,
         credential: Optional[str] = None,
-        **kwargs,
-    ):
+        **kwargs: object,
+    ) -> None:
         self.domain = domain
         self.certificate_path = certificate_path
         self.private_key_path = private_key_path
@@ -46,6 +46,7 @@ class SSLCertificate:
             last_renewed.replace("Z", "+00:00")
         )
         self.renew_command = renew_command
+        self.status: str
         if isinstance(status, (tuple, list)):
             self.status = str(status[0]) if status else "valid"
         else:
@@ -121,7 +122,7 @@ class SSLCertificate:
         cert_path: str,
         key_path: str,
         provider: str,
-        provider_conf: str,
+        provider_conf: Optional[str],
         renew_before_days: int = 30,
         renew_command: str = "",
         email: str = "",
@@ -132,15 +133,11 @@ class SSLCertificate:
         cert = x509.load_pem_x509_certificate(cert_data, default_backend())
 
         # Extract domain from CN or SAN
+        cns = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+        common_name = str(cns[0].value) if cns else ""
         try:
-            common_name = cert.subject.get_attributes_for_oid(
-                x509.NameOID.COMMON_NAME
-            )[0].value
-        except IndexError:
-            common_name = ""
-        try:
-            san = cert.extensions.get_extension_for_oid(
-                x509.ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+            san = cert.extensions.get_extension_for_class(
+                x509.SubjectAlternativeName
             )
             domains = san.value.get_values_for_type(x509.DNSName)
             domain = domains[0] if domains else common_name

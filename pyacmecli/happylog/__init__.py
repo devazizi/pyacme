@@ -81,7 +81,7 @@ def remove_file_handlers() -> None:
             h.close()
 
 
-def set_log_file(file_path: str | os.PathLike) -> logging.FileHandler:
+def set_log_file(file_path: str | os.PathLike[str]) -> logging.FileHandler:
     """Configure structured, clean file logging for background and cron execution."""
     path_str = os.path.expanduser(str(file_path))
     parent_dir = os.path.dirname(os.path.abspath(path_str))

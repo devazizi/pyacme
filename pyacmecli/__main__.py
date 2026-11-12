@@ -1,6 +1,8 @@
 """CLI entrypoint for pyacme - ACME/Let's Encrypt certificate management."""
 
 import functools
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
 import json
 import os
 import subprocess
@@ -26,7 +28,10 @@ from pyacmecli.acme.storage import (
     pyacme_lock,
     validate_domain_name,
 )
-from pyacmecli.common.certificates import get_certificate_list
+from pyacmecli.common.certificates import (
+    CertificateListItem,
+    get_certificate_list,
+)
 from pyacmecli.common.fsutil import (
     PUBLIC_FILE_MODE,
     LockBusyError,
@@ -56,11 +61,15 @@ CERTIFICATE_TABLE_HEADERS = [
 ]
 
 
-def locked(func):
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def locked(func: Callable[P, R]) -> Callable[P, R]:
     """Run a command while holding the pyacme lock."""
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             lock = pyacme_lock()
             lock.__enter__()
@@ -77,7 +86,7 @@ def locked(func):
 RENEW_COMMAND_TIMEOUT = 600
 
 
-def renew_command_env(cert) -> dict[str, str]:
+def renew_command_env(cert: CertificateListItem) -> dict[str, str]:
     """Variables that tell a renew command which certificate changed."""
     cert_dir = os.path.dirname(cert.certificate_path)
     return {
@@ -532,10 +541,11 @@ def certificate_renew(
                     )
                     continue
                 LOG.info(f"Start renewing certificate {cert.domain}")
-            renew_kwargs = {"staging": effective_staging}
-            if directory_url:
-                renew_kwargs["directory_url"] = directory_url
-            renew_certificate(cert_json_path, **renew_kwargs)
+            renew_certificate(
+                cert_json_path,
+                staging=effective_staging,
+                directory_url=directory_url,
+            )
         except Exception as exc:
             LOG.error(
                 f"Renewal failed for {cert.domain}: {type(exc).__name__}: {exc}"

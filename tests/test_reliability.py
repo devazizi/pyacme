@@ -143,7 +143,7 @@ def test_cron_continues_after_failure_and_exits_non_zero(temp_pyacme_home):
     for domain in ("a.example.com", "b.example.com", "c.example.com"):
         _write_cert(temp_pyacme_home, domain)
 
-    def renew(cert_json_path, staging=None):
+    def renew(cert_json_path, **kwargs):
         if "b.example.com" in cert_json_path:
             raise RuntimeError("boom")
 
