@@ -134,7 +134,8 @@ Options:
 | `--provider` | Yes | One of `cloudflare`, `arvancloud`, `digitalocean`, `hetzner`, `powerdns`, `route53`, `ovh`, `acmedns`, or `dns`. |
 | `--email` | Yes | Email used for the Let's Encrypt account. |
 | `--access-token` | When required | DNS provider API token or credential string. Prefer `PYACME_<PROVIDER>_TOKEN` (see [Credentials](#credentials)). |
-| `--no-store-token` | No | Do not save the credential in `certificate.json`; renewals read it from the environment. |
+| `--no-store-token` | No | Do not store the token; renewals read it from the environment. |
+| `--credential` | No | Name of a stored credential to use, or to save the token under (see [Credentials](#credentials)). |
 | `--renew-command` | Yes | Shell command to run after successful renewal. |
 | `--key-type` | No | `rsa2048` (default), `rsa4096`, `ec256`, or `ec384`. Stored and reused on renewal. |
 | `--staging` | No | Use Let's Encrypt Staging ACME directory to avoid rate limits. |
@@ -285,6 +286,12 @@ and `time() - pyacme_cron_last_run_timestamp_seconds > 2 * 86400`.
 
 ## Provider Examples
 
+Every provider looks for the zone starting at the most specific name: for
+`app.dev.example.com` it tries `app.dev.example.com`, then `dev.example.com`,
+then `example.com`. A delegated subzone hosted as its own zone is therefore
+used instead of its parent. Challenge records are removed after validation;
+only records named exactly `_acme-challenge.<domain>` are touched.
+
 ### Cloudflare
 
 ```bash
@@ -409,13 +416,42 @@ python -m pyacmecli new \
 
 Pass provider credentials through `PYACME_<PROVIDER>_TOKEN`, for example
 `PYACME_CLOUDFLARE_TOKEN`, instead of `--access-token`; command-line
-arguments end up in shell history and are visible in `ps`. On renewal the
-variable takes precedence over the stored token, so a rotated token only
-needs to be updated in one place.
+arguments end up in shell history and are visible in `ps`.
 
-By default the token is also stored in `certificate.json` (mode `0600`) so
-that `cron` works without extra setup. With `new --no-store-token` it is not
-stored, and the variable must be set wherever `cron` runs.
+By default the token is stored so that `cron` works without extra setup. It
+goes to its own file under `~/.pyacme/credentials/` (directory `0700`, file
+`0600`); `certificate.json` only records the credential's name. A token used
+by several certificates is stored once.
+
+```bash
+# store or rotate a credential (token from the variable, or a hidden prompt)
+PYACME_CLOUDFLARE_TOKEN=... pyacmecli credentials set cf-prod --provider cloudflare
+
+# issue with it
+pyacmecli new --domain example.com --provider cloudflare \
+  --credential cf-prod --email admin@example.com --renew-command 'systemctl reload nginx'
+
+pyacmecli credentials list      # names, providers and certificates; never tokens
+pyacmecli credentials delete cf-prod
+```
+
+Without `--credential`, the name is derived from the provider and token, for
+example `cloudflare-1a2b3c4d`.
+
+A token is resolved in this order:
+
+1. `PYACME_<PROVIDER>_TOKEN`
+2. the credential file named in `certificate.json`
+3. a token stored inline in `certificate.json` by an older version. It is
+   moved to a credential file on the next successful renewal.
+
+With `new --no-store-token` nothing is stored, and the variable must be set
+wherever `cron` runs.
+
+Tokens are not encrypted at rest. Unattended renewal needs the decryption key
+on the same machine, so encryption would not stop anyone who can already read
+the files. The file permissions and the account running pyacme are the
+security boundary; prefer tokens scoped to DNS edits of the zones involved.
 
 ## Local Files
 
@@ -431,6 +467,8 @@ Example:
   accounts/acme-v02.api.letsencrypt.org_directory/
     account.key.pem
     account_url.result
+  credentials/           # 0700
+    cloudflare-1a2b3c4d.json
   example.com/
     cert.pem
     privkey.pem
@@ -521,11 +559,31 @@ Publish the package:
 uv publish
 ```
 
-Run linting:
+Run the checks (the same ones pre-commit runs, plus the tests):
 
 ```bash
 uv run ruff check .
+uv run ruff format --check .
+uv run mypy
+uv run pytest
 ```
+
+Install the git hooks once with `uv run pre-commit install`. The tests run
+offline: any attempt to open a network connection fails the test.
+
+Code layout:
+
+| Module | Responsibility |
+| --- | --- |
+| `pyacmecli/acme/client.py` | ACME protocol: JWS, nonces, retries, `AcmeClient` |
+| `pyacmecli/acme/storage.py` | Files under `~/.pyacme`: keys, accounts, credentials |
+| `pyacmecli/acme/dnscheck.py` | DNS propagation checks against authoritative servers |
+| `pyacmecli/acme/operations.py` | Issue, renew, revoke, inspect and export |
+| `pyacmecli/acme/helper.py` | Compatibility re-exports of the names above |
+| `pyacmecli/webhooks/` | DNS providers and their registry |
+
+To redirect the store in tests or scripts, patch
+`pyacmecli.acme.storage.PYACME_HOME_PATH`.
 
 ## License
 
