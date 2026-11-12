@@ -19,7 +19,6 @@ from pyacmecli.acme.helper import (
     get_directory_url,
     int_to_b64u,
     jwk_from_privkey,
-    post_jws,
     renew_certificate,
     thumbprint,
     wait_for_dns,
@@ -247,7 +246,7 @@ def test_extract_domains_for_renewal_fallback_domain():
 
 
 def test_renew_certificate_single_domain_no_duplicate_identifiers(
-    temp_pyacme_home, cert_pem_factory, mock_sleep
+    temp_pyacme_home, cert_pem_factory, mock_sleep, fake_acme
 ):
     """Verify single-domain renewal produces exactly 1 identifier (no duplicated apex)."""
     domain = "single.example.com"
@@ -286,65 +285,9 @@ def test_renew_certificate_single_domain_no_duplicate_identifiers(
     with open(json_path, "w") as f:
         json.dump(initial_meta, f)
 
-    # Mock ACME session and responses
-    mock_session = MagicMock()
-
-    def mock_get(url, **kwargs):
-        resp = MagicMock()
-        resp.raise_for_status = lambda: None
-        if "directory" in url:
-            resp.json.return_value = {
-                "newNonce": "https://acme.org/nonce",
-                "newOrder": "https://acme.org/newOrder",
-            }
-        elif "cert" in url:
-            resp.text = cert_pem.decode("utf-8")
-        else:
-            resp.json.return_value = {
-                "status": "valid",
-                "challenges": [
-                    {
-                        "type": "dns-01",
-                        "token": "tok1",
-                        "url": "https://acme.org/ch1",
-                    }
-                ],
-                "identifier": {"type": "dns", "value": domain},
-            }
-        return resp
-
-    mock_session.get.side_effect = mock_get
-    mock_session.head.return_value = MagicMock(
-        headers={"Replay-Nonce": "nonce-123"}
-    )
-
-    captured_order_payloads = []
-    original_post_jws = post_jws
-
-    def spy_post_jws(session, url, payload_obj, *args, **kwargs):
-        if url == "https://acme.org/newOrder":
-            captured_order_payloads.append(payload_obj)
-        return original_post_jws(session, url, payload_obj, *args, **kwargs)
-
-    def mock_post(*args, **kwargs):
-        resp = MagicMock()
-        resp.status_code = 201
-        resp.headers = {"Location": "https://acme.org/order/1"}
-        resp.json.return_value = {
-            "status": "valid",
-            "authorizations": ["https://acme.org/authz/1"],
-            "finalize": "https://acme.org/order/1/finalize",
-            "certificate": "https://acme.org/order/1/cert",
-        }
-        resp.raise_for_status = lambda: None
-        return resp
-
-    mock_session.post.side_effect = mock_post
-
+    fake = fake_acme(cert_pem)
     with (
-        patch("requests.Session", return_value=mock_session),
         patch("pyacmecli.acme.helper.wait_for_dns"),
-        patch("pyacmecli.acme.helper.post_jws", side_effect=spy_post_jws),
         patch("builtins.input", return_value=""),
     ):
         renew_certificate(json_path)
@@ -354,6 +297,7 @@ def test_renew_certificate_single_domain_no_duplicate_identifiers(
         renewed_meta = json.load(f)
     assert renewed_meta["status"] == "valid"
     assert renewed_meta["domains"] == [domain]
+    captured_order_payloads = fake.payloads("/new-order")
     assert len(captured_order_payloads) == 1
     assert captured_order_payloads[0]["identifiers"] == [
         {"type": "dns", "value": domain}
@@ -361,7 +305,7 @@ def test_renew_certificate_single_domain_no_duplicate_identifiers(
 
 
 def test_renew_certificate_multi_san_domains(
-    temp_pyacme_home, cert_pem_factory, mock_sleep
+    temp_pyacme_home, cert_pem_factory, mock_sleep, fake_acme
 ):
     """Verify multi-SAN renewal preserves all domains and sends all to ACME order."""
     domains = ["app.example.com", "api.example.com", "admin.example.com"]
@@ -402,68 +346,9 @@ def test_renew_certificate_multi_san_domains(
     with open(json_path, "w") as f:
         json.dump(initial_meta, f)
 
-    mock_session = MagicMock()
-
-    def mock_get(url, **kwargs):
-        resp = MagicMock()
-        resp.raise_for_status = lambda: None
-        if "directory" in url:
-            resp.json.return_value = {
-                "newNonce": "https://acme.org/nonce",
-                "newOrder": "https://acme.org/newOrder",
-            }
-        elif "cert" in url:
-            resp.text = cert_pem.decode("utf-8")
-        else:
-            resp.json.return_value = {
-                "status": "valid",
-                "challenges": [
-                    {
-                        "type": "dns-01",
-                        "token": "tok",
-                        "url": "https://acme.org/ch",
-                    }
-                ],
-                "identifier": {"type": "dns", "value": "test"},
-            }
-        return resp
-
-    mock_session.get.side_effect = mock_get
-    mock_session.head.return_value = MagicMock(
-        headers={"Replay-Nonce": "nonce-multi"}
-    )
-
-    captured_order_payloads = []
-    original_post_jws = post_jws
-
-    def spy_post_jws(session, url, payload_obj, *args, **kwargs):
-        if url == "https://acme.org/newOrder":
-            captured_order_payloads.append(payload_obj)
-        return original_post_jws(session, url, payload_obj, *args, **kwargs)
-
-    def mock_post(*args, **kwargs):
-        resp = MagicMock()
-        resp.status_code = 201
-        resp.headers = {"Location": "https://acme.org/order/multi"}
-        resp.json.return_value = {
-            "status": "valid",
-            "authorizations": [
-                "https://acme.org/authz/1",
-                "https://acme.org/authz/2",
-                "https://acme.org/authz/3",
-            ],
-            "finalize": "https://acme.org/order/multi/finalize",
-            "certificate": "https://acme.org/order/multi/cert",
-        }
-        resp.raise_for_status = lambda: None
-        return resp
-
-    mock_session.post.side_effect = mock_post
-
+    fake = fake_acme(cert_pem)
     with (
-        patch("requests.Session", return_value=mock_session),
         patch("pyacmecli.acme.helper.wait_for_dns"),
-        patch("pyacmecli.acme.helper.post_jws", side_effect=spy_post_jws),
         patch("builtins.input", return_value=""),
     ):
         renew_certificate(json_path)
@@ -472,6 +357,7 @@ def test_renew_certificate_multi_san_domains(
         renewed_meta = json.load(f)
     assert renewed_meta["status"] == "valid"
     assert renewed_meta["domains"] == domains
+    captured_order_payloads = fake.payloads("/new-order")
     assert len(captured_order_payloads) == 1
     assert captured_order_payloads[0]["identifiers"] == [
         {"type": "dns", "value": d} for d in domains

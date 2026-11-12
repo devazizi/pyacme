@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import time
+import weakref
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import dns.exception
 import dns.resolver
@@ -212,23 +214,62 @@ def get_nonce(session: requests.Session, new_nonce_url: str) -> str:
     return nonce
 
 
+class AcmeError(RuntimeError):
+    """An ACME request failed; carries the RFC 7807 problem document."""
+
+    def __init__(self, url: str, status: int, problem: dict) -> None:
+        self.url = url
+        self.status = status
+        self.problem = problem
+        self.type = str(problem.get("type", ""))
+        self.detail = str(problem.get("detail", ""))
+        super().__init__(
+            f"ACME request to {url} failed with HTTP {status}: "
+            f"{self.type or 'no problem type'} {self.detail}".rstrip()
+        )
+
+
+# Longest Retry-After pyacme waits for inline; longer back-offs (typically
+# rate limits measured in hours) fail fast so cron can report them.
+MAX_INLINE_RETRY_AFTER = 60
+
+# Replay-Nonce from the previous response, per session (RFC 8555 7.2).
+_SESSION_NONCES: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
 def make_jws(privkey, payload_obj, url, nonce, jwk=None, kid=None):
-    payload_b = json.dumps(payload_obj).encode("utf8")
-    payload64 = b64u(payload_b)
+    """Build a flattened JWS; payload_obj None makes a POST-as-GET body."""
+    payload64 = (
+        "" if payload_obj is None else b64u(json.dumps(payload_obj).encode())
+    )
     protected = {"alg": "RS256", "nonce": nonce, "url": url}
     if jwk:
         protected["jwk"] = jwk
     else:
         protected["kid"] = kid
-    protected_b = json.dumps(protected, separators=(",", ":")).encode("utf8")
-    protected64 = b64u(protected_b)
-    signing_input = (protected64 + "." + payload64).encode("ascii")
+    protected64 = b64u(json.dumps(protected, separators=(",", ":")).encode())
+    signing_input = f"{protected64}.{payload64}".encode("ascii")
     signature = privkey.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
     return {
         "protected": protected64,
         "payload": payload64,
         "signature": b64u(signature),
     }
+
+
+def _retry_after_seconds(resp) -> float | None:
+    """Parse a Retry-After header (seconds or HTTP date)."""
+    value = resp.headers.get("Retry-After")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
 def post_jws(
@@ -241,62 +282,70 @@ def post_jws(
     kid=None,
     max_retries=5,
 ):
-    for attempt in range(max_retries):
-        nonce = get_nonce(session, new_nonce_url)
+    """POST a signed request; retry only what RFC 8555 says is retryable.
 
-        if payload_obj is None:
-            payload_b = b""
-            payload64 = ""
-        else:
-            payload_b = json.dumps(payload_obj).encode("utf8")
-            payload64 = b64u(payload_b)
-
-        protected = {"alg": "RS256", "nonce": nonce, "url": url}
-        if jwk:
-            protected["jwk"] = jwk
-        else:
-            protected["kid"] = kid
-
-        protected_b = json.dumps(protected, separators=(",", ":")).encode(
-            "utf8"
+    badNonce is retried with the fresh nonce the server returned. A 503 or
+    rateLimited response is retried only when Retry-After is short. Every
+    other error raises AcmeError at once instead of being resent blindly.
+    """
+    for attempt in range(1, max_retries + 1):
+        nonce = _SESSION_NONCES.pop(session, None) or get_nonce(
+            session, new_nonce_url
         )
-        protected64 = b64u(protected_b)
-
-        signing_input = (protected64 + "." + payload64).encode("ascii")
-        signature = privkey.sign(
-            signing_input, padding.PKCS1v15(), hashes.SHA256()
+        jws = make_jws(privkey, payload_obj, url, nonce, jwk=jwk, kid=kid)
+        r = session.post(
+            url,
+            json=jws,
+            headers={"Content-Type": "application/jose+json"},
+            timeout=30,
         )
+        replay_nonce = r.headers.get("Replay-Nonce")
+        if isinstance(replay_nonce, str):
+            _SESSION_NONCES[session] = replay_nonce
 
-        jws = {
-            "protected": protected64,
-            "payload": payload64,
-            "signature": b64u(signature),
-        }
-
-        headers = {"Content-Type": "application/jose+json"}
-        r = session.post(url, json=jws, headers=headers, timeout=30)
-
-        if r.status_code in (200, 201, 204):
+        if 200 <= r.status_code < 300:
             return r
 
         try:
-            body = r.json()
-        except (ValueError, requests.exceptions.JSONDecodeError):
-            body = {}
+            problem = r.json()
+        except ValueError:
+            problem = {}
+        if not isinstance(problem, dict):
+            problem = {}
+        error = AcmeError(url, r.status_code, problem)
 
-        if (
-            body.get("type") == "urn:ietf:params:acme:error:badNonce"
-            or r.status_code == 400
-        ):
-            time.sleep(0.5)
+        if attempt == max_retries:
+            raise error
+        if error.type.endswith(":badNonce"):
+            LOG.debug(f"badNonce from {url}; retrying ({attempt})")
             continue
+        retry_after = _retry_after_seconds(r)
+        if (
+            r.status_code == 503 or error.type.endswith(":rateLimited")
+        ) and retry_after is not None:
+            if retry_after <= MAX_INLINE_RETRY_AFTER:
+                LOG.warning(
+                    f"{url} asked to retry after {retry_after:.0f}s; waiting"
+                )
+                time.sleep(retry_after)
+                continue
+            raise AcmeError(
+                url,
+                r.status_code,
+                {
+                    **problem,
+                    "detail": f"{error.detail} (retry after "
+                    f"{retry_after:.0f}s)".strip(),
+                },
+            )
+        raise error
 
-        LOG.error(f"DEBUG JWS failed: {r.status_code} {r.text}")
-        r.raise_for_status()
+    raise RuntimeError("unreachable: max_retries must be at least 1")
 
-    raise RuntimeError(
-        f"Failed after retries; last status: {r.status_code}, body: {getattr(r, 'text', '<no body>')}"
-    )
+
+def post_as_get(session, url, privkey, new_nonce_url, account_url):
+    """Fetch an ACME resource with POST-as-GET (RFC 8555 6.3)."""
+    return post_jws(session, url, None, privkey, new_nonce_url, kid=account_url)
 
 
 def account_directory_url(domain: str) -> str:
@@ -374,10 +423,9 @@ def perform_dns_challenge(
     provider_name,
     access_token: str | None = None,
 ):
-    # Step 1: GET authz details
-    resp = session.get(authz_url, timeout=10)
-    resp.raise_for_status()
-    authz_data = resp.json()
+    authz_data = post_as_get(
+        session, authz_url, privkey, new_nonce_url, account_url
+    ).json()
 
     dns_challenge = None
     for challenge in authz_data["challenges"]:
@@ -415,15 +463,15 @@ def perform_dns_challenge(
     wait_for_dns(record_name, txt_value)
 
     challenge_url = dns_challenge["url"]
-    resp = post_jws(
+    post_jws(
         session, challenge_url, {}, privkey, new_nonce_url, kid=account_url
     )
 
     for _ in range(ACME_POLL_ATTEMPTS):
         time.sleep(ACME_POLL_INTERVAL)
-        resp = session.get(authz_url, timeout=10)
-        resp.raise_for_status()
-        authz = resp.json()
+        authz = post_as_get(
+            session, authz_url, privkey, new_nonce_url, account_url
+        ).json()
         status = authz["status"]
         if status == "valid":
             return
@@ -612,9 +660,9 @@ def finalize_order(
     if not cert_url:
         raise RuntimeError("Certificate URL not returned after finalization")
 
-    cert_resp = session.get(cert_url)
-    cert_resp.raise_for_status()
-    certificate_pem = cert_resp.text
+    certificate_pem = post_as_get(
+        session, cert_url, privkey, new_nonce_url, account_url
+    ).text
 
     cert_path = install_certificate(domains[0], certificate_pem, cert_privkey)
     LOG.info(f"Certificate and new private key saved: {cert_path}")

@@ -512,12 +512,16 @@ def test_r4_renew_certificate_folder_name_alignment(
             }
             resp.headers = {"Location": "https://acme.test/order/1"}
             return resp
-        if "finalize" in url or "order" in url:
+        if "finalize" in url or "/order/" in url:
             resp.status_code = 200
             resp.json.return_value = {
                 "status": "valid",
                 "certificate": "https://acme.test/cert/1",
             }
+            return resp
+        if "/cert/" in url:
+            resp.status_code = 200
+            resp.text = cert_pem.decode("utf-8")
             return resp
         resp.status_code = 200
         resp.json.return_value = {}

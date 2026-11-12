@@ -28,34 +28,42 @@ def _authz(status, error=None):
     return resp
 
 
-def _run_challenge(responses):
-    session = MagicMock()
-    session.get.side_effect = responses
+def _run_challenge(polls):
+    """Drive perform_dns_challenge; polls are the authz states after the POST."""
+    authz_reads = [_authz("pending"), *polls]
+    calls = []
+
+    def fake_post_jws(session, url, payload, *args, **kwargs):
+        calls.append(url)
+        if url == "https://ca/chal":
+            return MagicMock()
+        return authz_reads.pop(0)
+
+    provider = MagicMock()
     with (
-        patch.object(
-            helper, "dns_challenge_provider", return_value=MagicMock()
-        ),
+        patch.object(helper, "dns_challenge_provider", return_value=provider),
         patch.object(helper, "wait_for_dns"),
-        patch.object(helper, "post_jws"),
+        patch.object(helper, "post_jws", side_effect=fake_post_jws),
     ):
-        helper.perform_dns_challenge(
-            session,
-            privkey=MagicMock(),
-            account_url="https://ca/acct/1",
-            new_nonce_url="https://ca/nonce",
-            authz_url="https://ca/authz/1",
-            jwk={"e": "AQAB", "kty": "RSA", "n": "abc"},
-            provider_name="cloudflare",
-            access_token="dummy",
-        )
-    return session
+        try:
+            helper.perform_dns_challenge(
+                MagicMock(),
+                privkey=MagicMock(),
+                account_url="https://ca/acct/1",
+                new_nonce_url="https://ca/nonce",
+                authz_url="https://ca/authz/1",
+                jwk={"e": "AQAB", "kty": "RSA", "n": "abc"},
+                provider_name="cloudflare",
+                access_token="dummy",
+            )
+        finally:
+            _run_challenge.provider = provider
+    return calls
 
 
 def test_challenge_returns_when_authorization_becomes_valid(mock_sleep):
-    session = _run_challenge(
-        [_authz("pending"), _authz("pending"), _authz("valid")]
-    )
-    assert session.get.call_count == 3
+    calls = _run_challenge([_authz("pending"), _authz("valid")])
+    assert calls.count("https://ca/authz/1") == 3
 
 
 def test_challenge_raises_on_invalid_authorization(mock_sleep):
