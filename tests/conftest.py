@@ -73,7 +73,7 @@ def session_rsa_key():
 def cert_pem_factory(session_rsa_key):
     """Factory fixture to generate valid X.509 PEM certificates with custom SANs & expiry."""
 
-    def _create(domains, expires_in_days=90):
+    def _create(domains, expires_in_days=90, issued_days_ago=1):
         key = session_rsa_key
         common_name = domains[0]
         san_list = [x509.DNSName(d) for d in domains]
@@ -93,7 +93,7 @@ def cert_pem_factory(session_rsa_key):
             )
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
-            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_before(now - datetime.timedelta(days=issued_days_ago))
             .not_valid_after(now + datetime.timedelta(days=expires_in_days))
             .add_extension(
                 x509.SubjectAlternativeName(san_list), critical=False

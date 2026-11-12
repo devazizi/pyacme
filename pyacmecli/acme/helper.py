@@ -6,7 +6,7 @@ import json
 import os
 import time
 import weakref
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 import dns.exception
@@ -53,6 +53,9 @@ ACME_POLL_INTERVAL = 2
 ACME_POLL_ATTEMPTS = 150  # 150 * 2s = 5 minutes
 # RFC 8555 7.1.6: none of these authorization states can become valid.
 AUTHZ_FAILED_STATES = ("invalid", "deactivated", "expired", "revoked")
+
+# Used when the certificate lifetime cannot be read from cert.pem.
+DEFAULT_RENEWAL_WINDOW = timedelta(days=30)
 
 # Certificate key types. rsa2048 stays the default for client compatibility.
 DEFAULT_KEY_TYPE = "rsa2048"
@@ -640,6 +643,22 @@ def wait_for_dns(
 
         sleep_time = min(float(interval), max(0.1, float(timeout - elapsed)))
         time.sleep(sleep_time)
+
+
+def renewal_window(cert_path: str) -> timedelta:
+    """Return how long before expiry a certificate becomes due for renewal.
+
+    One third of the certificate's lifetime: 30 days for today's 90-day
+    Let's Encrypt certificates, and proportionally less for the shorter
+    lifetimes the CA/Browser Forum is phasing in, where a fixed 30 days
+    would renew a 45-day certificate almost immediately.
+    """
+    try:
+        with open(cert_path, "rb") as f:
+            cert = x509.load_pem_x509_certificate(f.read())
+    except (OSError, ValueError):
+        return DEFAULT_RENEWAL_WINDOW
+    return (cert.not_valid_after_utc - cert.not_valid_before_utc) / 3
 
 
 def generate_private_key(key_type: str = DEFAULT_KEY_TYPE):

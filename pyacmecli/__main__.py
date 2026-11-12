@@ -18,6 +18,7 @@ from pyacmecli.acme.helper import (
     init_dir,
     inspect_certificate,
     pyacme_lock,
+    renewal_window,
     renew_certificate,
     revoke_certificate,
     validate_domain_name,
@@ -354,6 +355,15 @@ def certificate_revoke(
     default=None,
     help="Optional file path to write log output.",
 )
+@click.option(
+    "--renew-before-days",
+    type=click.IntRange(1, 365),
+    default=None,
+    help=(
+        "Renew certificates expiring within this many days. "
+        "Default: one third of each certificate's lifetime."
+    ),
+)
 @click.pass_context
 @locked
 def certificate_renew(
@@ -361,8 +371,12 @@ def certificate_renew(
     force_renewal: bool = False,
     staging: bool | None = None,
     log_file: str | None = None,
+    renew_before_days: int | None = None,
 ) -> None:
-    """Renew certificates that expire within 30 days, or all if --force-renewal."""
+    """Renew certificates that are due, or all with --force-renewal.
+
+    Revoked certificates are skipped unless --force-renewal is given.
+    """
     effective_log_file = log_file or (ctx.obj or {}).get("LOG_FILE")
     if effective_log_file:
         set_log_file(effective_log_file)
@@ -380,7 +394,6 @@ def certificate_renew(
         return
 
     now = datetime.now(timezone.utc)
-    one_month_later = now + timedelta(days=30)
 
     certificates = get_certificate_list(base_dir)
     failed: list[str] = []
@@ -393,13 +406,27 @@ def certificate_renew(
         try:
             if force_renewal:
                 LOG.warning(f"Force renewing certificate {cert.domain}")
+            elif cert.status == "revoked":
+                LOG.warning(
+                    f"Skipping revoked certificate {cert.domain}; "
+                    "use --force-renewal to reissue it"
+                )
+                continue
             else:
-                target_time = datetime.fromisoformat(
+                expires = datetime.fromisoformat(
                     cert.expiry_date.replace("Z", "+00:00")
                 )
-                if target_time > one_month_later:
+                window = (
+                    timedelta(days=renew_before_days)
+                    if renew_before_days is not None
+                    else renewal_window(cert.certificate_path)
+                )
+                remaining = expires - now
+                if remaining > window:
                     LOG.info(
-                        f"Target certificate {cert.domain} is more than 30 days away"
+                        f"Certificate {cert.domain} expires in "
+                        f"{remaining.days} days; renewal starts at "
+                        f"{window.days} days"
                     )
                     continue
                 LOG.info(f"Start renewing certificate {cert.domain}")

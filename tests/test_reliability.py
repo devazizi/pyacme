@@ -201,3 +201,74 @@ def test_write_atomic_keeps_old_file_when_write_fails(tmp_path):
     write_atomic(str(target), "new", 0o644)
     assert target.read_text() == "new"
     assert os.stat(target).st_mode & 0o777 == 0o644
+
+
+def _write_cert_with_pem(home, domain, cert_and_key, status="valid"):
+    cert_pem, _key = cert_and_key
+    _write_cert(home, domain)
+    domain_dir = os.path.join(home, domain)
+    with open(os.path.join(domain_dir, "cert.pem"), "wb") as f:
+        f.write(cert_pem)
+    meta_path = os.path.join(domain_dir, "certificate.json")
+    with open(meta_path) as f:
+        meta = json.load(f)
+    from cryptography import x509
+
+    expiry = x509.load_pem_x509_certificate(cert_pem).not_valid_after_utc
+    meta["expiry_date"] = expiry.strftime("%Y-%m-%dT%H:%M:%SZ")
+    meta["status"] = status
+    with open(meta_path, "w") as f:
+        json.dump(meta, f)
+
+
+def _cron(args=()):
+    with (
+        patch("pyacmecli.__main__.renew_certificate") as renew,
+        patch(
+            "pyacmecli.__main__.run_renew_command_as_subprocess_command",
+            return_value=True,
+        ),
+    ):
+        result = CliRunner().invoke(main_command, ["cron", *args])
+    assert result.exit_code == 0, result.output
+    return sorted(
+        os.path.basename(os.path.dirname(c.args[0]))
+        for c in renew.call_args_list
+    )
+
+
+def test_renewal_window_is_a_third_of_the_lifetime(
+    temp_pyacme_home, cert_pem_factory
+):
+    # Both expire in 20 days. 45-day lifetime: window 15 days, not due.
+    # 90-day lifetime: window 30 days, due.
+    _write_cert_with_pem(
+        temp_pyacme_home,
+        "short.example.com",
+        cert_pem_factory(
+            ["short.example.com"], expires_in_days=20, issued_days_ago=25
+        ),
+    )
+    _write_cert_with_pem(
+        temp_pyacme_home,
+        "long.example.com",
+        cert_pem_factory(
+            ["long.example.com"], expires_in_days=20, issued_days_ago=70
+        ),
+    )
+    assert _cron() == ["long.example.com"]
+    assert _cron(["--renew-before-days", "21"]) == [
+        "long.example.com",
+        "short.example.com",
+    ]
+
+
+def test_cron_skips_revoked_unless_forced(temp_pyacme_home, cert_pem_factory):
+    _write_cert_with_pem(
+        temp_pyacme_home,
+        "gone.example.com",
+        cert_pem_factory(["gone.example.com"], expires_in_days=1),
+        status="revoked",
+    )
+    assert _cron() == []
+    assert _cron(["--force-renewal"]) == ["gone.example.com"]
