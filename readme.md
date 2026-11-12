@@ -16,7 +16,9 @@ certificates, and renew certificates from cron.
 - Support manual DNS TXT records when no provider integration is used.
 - Store certificates, private keys, account keys, and metadata under `~/.pyacme`.
 - Renew certificates automatically and run a custom command after renewal.
-- Show certificate status in a terminal table.
+- Generate a fresh certificate key (RSA or ECDSA) on every issuance.
+- Work with any RFC 8555 CA (`--directory-url`), not only Let's Encrypt.
+- Show certificate status as a table or JSON, and export Prometheus metrics.
 - Certificate management tools: `inspect`, `export` (PEM / PFX), `revoke`, and `delete`.
 
 ## Supported Providers
@@ -44,11 +46,15 @@ certificates, and renew certificates from cron.
 
 ```bash
 pip install pyacmecli
+# with AWS Route 53 support
+pip install 'pyacmecli[route53]'
 ```
 
 You can run the CLI with:
 
 ```bash
+pyacmecli --help
+# or
 python -m pyacmecli --help
 ```
 
@@ -127,10 +133,20 @@ Options:
 | `--domain` | Yes | Domain name. Can be used multiple times. |
 | `--provider` | Yes | One of `cloudflare`, `arvancloud`, `digitalocean`, `hetzner`, `powerdns`, `route53`, `ovh`, `acmedns`, or `dns`. |
 | `--email` | Yes | Email used for the Let's Encrypt account. |
-| `--access-token` | When required | DNS provider API token or credential string. |
+| `--access-token` | When required | DNS provider API token or credential string. Prefer `PYACME_<PROVIDER>_TOKEN` (see [Credentials](#credentials)). |
+| `--no-store-token` | No | Do not save the credential in `certificate.json`; renewals read it from the environment. |
 | `--renew-command` | Yes | Shell command to run after successful renewal. |
+| `--key-type` | No | `rsa2048` (default), `rsa4096`, `ec256`, or `ec384`. Stored and reused on renewal. |
 | `--staging` | No | Use Let's Encrypt Staging ACME directory to avoid rate limits. |
 | `--log-file` | No | Optional file path to write log output (without ANSI color codes). |
+
+Use another ACME CA (step-ca, Pebble, ZeroSSL) with the global
+`--directory-url` option or `PYACME_DIRECTORY_URL`. The URL is stored with
+the certificate and used again for renewal and revocation:
+
+```bash
+pyacmecli --directory-url https://ca.internal/acme/acme/directory new ...
+```
 
 ### `list`
 
@@ -141,7 +157,11 @@ python -m pyacmecli list
 ```
 
 The table includes the domain, certificate path, expiry date, status, renew
-command, and last renewal time.
+command, and last renewal time. Use `--json` for machine-readable output:
+
+```bash
+pyacmecli list --json
+```
 
 ### `inspect`
 
@@ -203,7 +223,10 @@ Options:
 
 ### `cron`
 
-Renews certificates that expire within 30 days:
+Renews certificates that are due. A certificate is due when less than one
+third of its lifetime remains: 30 days for a 90-day Let's Encrypt
+certificate, proportionally less for shorter lifetimes. Revoked
+certificates are skipped unless `--force-renewal` is given.
 
 ```bash
 python -m pyacmecli cron
@@ -226,13 +249,39 @@ remaining certificates are still processed, each failure is logged, and `cron`
 exits with a non-zero status listing the failed domains. Polling the CA for a
 challenge or order result gives up after 5 minutes.
 
+Only one `new`, `cron`, `revoke` or `delete` runs at a time. A second run
+exits with `Another pyacme process holds ~/.pyacme/.lock` instead of racing
+the first one.
+
+The renew command gets these variables, so one command can handle every
+certificate, and is stopped after 600 seconds:
+
+| Variable | Value |
+| --- | --- |
+| `PYACME_DOMAIN` | Certificate name, e.g. `example.com` |
+| `PYACME_CERT_DIR` | `~/.pyacme/example.com` |
+| `PYACME_CERT_PATH` | `~/.pyacme/example.com/cert.pem` |
+| `PYACME_KEY_PATH` | `~/.pyacme/example.com/privkey.pem` |
+
 Options:
 
 | Option | Required | Description |
 | --- | --- | --- |
 | `--force-renewal` | No | Force renewal certificates regardless of remaining days. |
+| `--renew-before-days` | No | Renew certificates expiring within this many days instead of the one-third rule. |
+| `--metrics-file` | No | Write Prometheus textfile-collector metrics to this path. |
 | `--staging` | No | Override renewal directory to Let's Encrypt Staging. |
 | `--log-file` | No | Optional file path to write log output. |
+
+With `--metrics-file /var/lib/node_exporter/textfile/pyacme.prom`, node
+exporter's textfile collector exposes:
+
+- `pyacme_certificate_expiry_timestamp_seconds{domain}`
+- `pyacme_renewal_failed{domain}` (1 if the last run failed for it)
+- `pyacme_cron_last_run_timestamp_seconds`
+
+Example alerts: `pyacme_certificate_expiry_timestamp_seconds - time() < 7 * 86400`
+and `time() - pyacme_cron_last_run_timestamp_seconds > 2 * 86400`.
 
 ## Provider Examples
 
@@ -356,23 +405,52 @@ python -m pyacmecli new \
   --renew-command 'systemctl reload nginx'
 ```
 
+## Credentials
+
+Pass provider credentials through `PYACME_<PROVIDER>_TOKEN`, for example
+`PYACME_CLOUDFLARE_TOKEN`, instead of `--access-token`; command-line
+arguments end up in shell history and are visible in `ps`. On renewal the
+variable takes precedence over the stored token, so a rotated token only
+needs to be updated in one place.
+
+By default the token is also stored in `certificate.json` (mode `0600`) so
+that `cron` works without extra setup. With `new --no-store-token` it is not
+stored, and the variable must be set wherever `cron` runs.
+
 ## Local Files
 
 For each certificate, PyACME creates a directory under `~/.pyacme` using the
-first domain name from the request.
+first domain name from the request. ACME accounts are shared: one per CA
+directory, under `~/.pyacme/accounts/`.
 
 Example:
 
 ```text
-~/.pyacme/example.com/
-  account.key.pem
-  account_url.result
-  cert.pem
-  privkey.pem
-  certificate.json
+~/.pyacme/
+  .lock
+  accounts/acme-v02.api.letsencrypt.org_directory/
+    account.key.pem
+    account_url.result
+  example.com/
+    cert.pem
+    privkey.pem
+    cert.pem.prev        # previous certificate, for manual rollback
+    privkey.pem.prev
+    certificate.json
 ```
 
-Do not delete this directory if you want automated renewal to keep working.
+Keys, `certificate.json` and account files are written with mode `0600`.
+Certificates issued by versions before 0.2.0 keep their per-domain
+`account.key.pem` and `account_url.result`; do not delete those. To tighten
+permissions on files written by older versions:
+
+```bash
+find ~/.pyacme -type f \( -name 'privkey.pem*' -o -name 'account.key.pem' \
+  -o -name '*.json' -o -name '*.result' \) -exec chmod 600 {} +
+```
+
+Rolling back a bad renewal: copy `cert.pem.prev` and `privkey.pem.prev` over
+`cert.pem` and `privkey.pem`, then run the renew command.
 
 ## Logging
 

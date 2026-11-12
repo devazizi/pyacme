@@ -165,9 +165,9 @@ def write_metrics_file(
 
 @click.group(
     help=(
-        "PyACME CLI - Get Let's Encrypt certificates with DNS providers "
-        "(Arvancloud, Cloudflare, AcmeDNS) or manual DNS records. "
-        "Use --verbose or --log-level DEBUG for debug output."
+        "PyACME CLI - Get certificates from Let's Encrypt or any ACME CA "
+        "using DNS-01 validation through a DNS provider API or manual DNS "
+        "records. Use --verbose or --log-level DEBUG for debug output."
     )
 )
 @click.option(
