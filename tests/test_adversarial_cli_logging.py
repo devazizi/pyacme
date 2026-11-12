@@ -12,8 +12,8 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa
 import pytest
 
+from pyacmecli.acme import client
 from pyacmecli.__main__ import main_command
-import pyacmecli.acme.helper as helper
 from pyacmecli.happylog import (
     LOG,
     ColorFormatter,
@@ -154,7 +154,7 @@ def test_cli_cron_staging_combinations(
         )
 
     with (
-        patch("pyacmecli.__main__.PYACME_HOME_PATH", str(tmp_path)),
+        patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)),
         patch("pyacmecli.__main__.renew_certificate") as mock_renew,
         patch("pyacmecli.__main__.run_renew_command_as_subprocess_command"),
     ):
@@ -168,17 +168,20 @@ def test_cli_cron_staging_combinations(
 def test_cli_new_staging_url_propagation(cli_runner, tmp_path, rsa_key):
     """Verify that --staging on 'new' directs requests to Let's Encrypt Staging Directory."""
     with (
-        patch("pyacmecli.__main__.PYACME_HOME_PATH", str(tmp_path)),
-        patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(tmp_path)),
-        patch("pyacmecli.acme.helper.get_directory") as mock_dir,
+        patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)),
+        patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)),
+        patch("pyacmecli.acme.client.get_directory") as mock_dir,
         patch(
-            "pyacmecli.acme.helper.ensure_account",
-            return_value=("accounts/test", rsa_key, "http://acc"),
-        ) as mock_acc,
-        patch("pyacmecli.acme.helper.post_jws") as mock_post,
-        patch("pyacmecli.acme.helper.perform_dns_challenge"),
-        patch("pyacmecli.acme.helper.finalize_order"),
-        patch("pyacmecli.acme.helper.SSLCertificate"),
+            "pyacmecli.acme.storage.load_or_make_rsa_key", return_value=rsa_key
+        ),
+        patch(
+            "pyacmecli.acme.storage.account_directory_url",
+            return_value="http://acc",
+        ),
+        patch("pyacmecli.acme.client.post_jws") as mock_post,
+        patch("pyacmecli.acme.operations.perform_dns_challenge"),
+        patch("pyacmecli.acme.operations.finalize_order"),
+        patch("pyacmecli.acme.operations.SSLCertificate"),
     ):
         mock_dir.return_value = {
             "newNonce": "http://nonce",
@@ -206,9 +209,7 @@ def test_cli_new_staging_url_propagation(cli_runner, tmp_path, rsa_key):
             catch_exceptions=False,
         )
         assert result.exit_code == 0
-        # ensure_account(session, directory, directory_url, email)
-        assert mock_acc.call_args[0][2] == helper.LETSENCRYPT_STAGING_DIRECTORY
-        assert mock_dir.call_args[0][1] == helper.LETSENCRYPT_STAGING_DIRECTORY
+        assert mock_dir.call_args[0][1] == client.LETSENCRYPT_STAGING_DIRECTORY
 
 
 def test_cli_cron_staging_url_propagation(
@@ -239,24 +240,20 @@ def test_cli_cron_staging_url_propagation(
         )
 
     with (
-        patch("pyacmecli.__main__.PYACME_HOME_PATH", str(tmp_path)),
-        patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(tmp_path)),
-        patch("pyacmecli.acme.helper.get_directory") as mock_dir,
+        patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)),
+        patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)),
+        patch("pyacmecli.acme.client.get_directory") as mock_dir,
         patch(
-            "pyacmecli.acme.helper.load_or_make_rsa_key", return_value=rsa_key
+            "pyacmecli.acme.storage.load_or_make_rsa_key", return_value=rsa_key
         ),
         patch(
-            "pyacmecli.acme.helper.account_directory_url",
+            "pyacmecli.acme.storage.account_directory_url",
             return_value="http://acc",
         ),
-        patch(
-            "pyacmecli.acme.helper.ensure_account",
-            return_value=("accounts/test", rsa_key, "http://acc"),
-        ),
-        patch("pyacmecli.acme.helper.post_jws") as mock_post,
-        patch("pyacmecli.acme.helper.perform_dns_challenge"),
-        patch("pyacmecli.acme.helper.finalize_order"),
-        patch("pyacmecli.acme.helper.SSLCertificate"),
+        patch("pyacmecli.acme.client.post_jws") as mock_post,
+        patch("pyacmecli.acme.operations.perform_dns_challenge"),
+        patch("pyacmecli.acme.operations.finalize_order"),
+        patch("pyacmecli.acme.operations.SSLCertificate"),
         patch("pyacmecli.__main__.run_renew_command_as_subprocess_command"),
     ):
         mock_dir.return_value = {
@@ -274,7 +271,7 @@ def test_cli_cron_staging_url_propagation(
             catch_exceptions=False,
         )
         assert result.exit_code == 0
-        assert mock_dir.call_args[0][1] == helper.LETSENCRYPT_STAGING_DIRECTORY
+        assert mock_dir.call_args[0][1] == client.LETSENCRYPT_STAGING_DIRECTORY
 
 
 def test_cli_cron_without_staging_should_preserve_stored_staging_flag(
@@ -305,24 +302,20 @@ def test_cli_cron_without_staging_should_preserve_stored_staging_flag(
         )
 
     with (
-        patch("pyacmecli.__main__.PYACME_HOME_PATH", str(tmp_path)),
-        patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(tmp_path)),
-        patch("pyacmecli.acme.helper.get_directory") as mock_dir,
+        patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)),
+        patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)),
+        patch("pyacmecli.acme.client.get_directory") as mock_dir,
         patch(
-            "pyacmecli.acme.helper.load_or_make_rsa_key", return_value=rsa_key
+            "pyacmecli.acme.storage.load_or_make_rsa_key", return_value=rsa_key
         ),
         patch(
-            "pyacmecli.acme.helper.account_directory_url",
+            "pyacmecli.acme.storage.account_directory_url",
             return_value="http://acc",
         ),
-        patch(
-            "pyacmecli.acme.helper.ensure_account",
-            return_value=("accounts/test", rsa_key, "http://acc"),
-        ),
-        patch("pyacmecli.acme.helper.post_jws") as mock_post,
-        patch("pyacmecli.acme.helper.perform_dns_challenge"),
-        patch("pyacmecli.acme.helper.finalize_order"),
-        patch("pyacmecli.acme.helper.SSLCertificate"),
+        patch("pyacmecli.acme.client.post_jws") as mock_post,
+        patch("pyacmecli.acme.operations.perform_dns_challenge"),
+        patch("pyacmecli.acme.operations.finalize_order"),
+        patch("pyacmecli.acme.operations.SSLCertificate"),
         patch("pyacmecli.__main__.run_renew_command_as_subprocess_command"),
     ):
         mock_dir.return_value = {
@@ -339,7 +332,7 @@ def test_cli_cron_without_staging_should_preserve_stored_staging_flag(
         )
         assert result.exit_code == 0
         # Should target staging directory because certificate.json has staging=True
-        assert mock_dir.call_args[0][1] == helper.LETSENCRYPT_STAGING_DIRECTORY
+        assert mock_dir.call_args[0][1] == client.LETSENCRYPT_STAGING_DIRECTORY
 
 
 # ==============================================================================

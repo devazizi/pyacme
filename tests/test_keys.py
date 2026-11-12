@@ -6,7 +6,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
-from pyacmecli.acme import helper
+from pyacmecli.acme import operations, storage
 
 
 @pytest.mark.parametrize(
@@ -17,14 +17,14 @@ from pyacmecli.acme import helper
     ],
 )
 def test_generate_private_key(key_type, kind, size):
-    key = helper.generate_private_key(key_type)
+    key = operations.generate_private_key(key_type)
     assert isinstance(key, kind)
     assert key.key_size == size
 
 
 def test_generate_private_key_rejects_unknown_type():
     with pytest.raises(ValueError, match="Unsupported key type"):
-        helper.generate_private_key("dsa1024")
+        operations.generate_private_key("dsa1024")
 
 
 def test_install_certificate_rotates_and_keeps_previous_pair(
@@ -38,8 +38,8 @@ def test_install_certificate_rotates_and_keeps_previous_pair(
     with open(os.path.join(domain_dir, "privkey.pem"), "wb") as f:
         f.write(old_key)
 
-    new_key = helper.generate_private_key("ec256")
-    cert_path = helper.install_certificate(
+    new_key = operations.generate_private_key("ec256")
+    cert_path = storage.install_certificate(
         "example.com", "NEW-CERT-PEM\n", new_key
     )
 

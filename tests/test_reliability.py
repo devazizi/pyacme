@@ -12,7 +12,7 @@ from pyacmecli.__main__ import (
     main_command,
     run_renew_command_as_subprocess_command,
 )
-from pyacmecli.acme import helper
+from pyacmecli.acme import client, dnscheck, operations
 
 
 def _authz(status, error=None):
@@ -28,6 +28,28 @@ def _authz(status, error=None):
     return resp
 
 
+_KEY = None
+
+
+def _client_key():
+    """One RSA key for signing in these tests (generating is slow)."""
+    global _KEY
+    if _KEY is None:
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return _KEY
+
+
+def _acme():
+    return client.AcmeClient(
+        MagicMock(),
+        {"newNonce": "https://ca/nonce"},
+        _client_key(),
+        account_url="https://ca/acct/1",
+    )
+
+
 def _run_challenge(polls):
     """Drive perform_dns_challenge; polls are the authz states after the POST."""
     authz_reads = [_authz("pending"), *polls]
@@ -41,20 +63,15 @@ def _run_challenge(polls):
 
     provider = MagicMock()
     with (
-        patch.object(helper, "dns_challenge_provider", return_value=provider),
-        patch.object(helper, "wait_for_dns"),
-        patch.object(helper, "post_jws", side_effect=fake_post_jws),
+        patch.object(
+            operations, "dns_challenge_provider", return_value=provider
+        ),
+        patch.object(dnscheck, "wait_for_dns"),
+        patch.object(client, "post_jws", side_effect=fake_post_jws),
     ):
         try:
-            helper.perform_dns_challenge(
-                MagicMock(),
-                privkey=MagicMock(),
-                account_url="https://ca/acct/1",
-                new_nonce_url="https://ca/nonce",
-                authz_url="https://ca/authz/1",
-                jwk={"e": "AQAB", "kty": "RSA", "n": "abc"},
-                provider_name="cloudflare",
-                access_token="dummy",
+            operations.perform_dns_challenge(
+                _acme(), "https://ca/authz/1", "cloudflare", "dummy"
             )
         finally:
             _run_challenge.provider = provider
@@ -76,35 +93,33 @@ def test_challenge_raises_on_invalid_authorization(mock_sleep):
 def test_challenge_times_out_when_authorization_stays_pending(
     mock_sleep, monkeypatch
 ):
-    monkeypatch.setattr(helper, "ACME_POLL_ATTEMPTS", 3)
+    monkeypatch.setattr(client, "ACME_POLL_ATTEMPTS", 3)
     with pytest.raises(TimeoutError, match="still 'pending'"):
         _run_challenge([_authz("pending")] * 4)
 
 
 def test_finalize_times_out_when_order_stays_processing(
-    mock_sleep, monkeypatch, temp_pyacme_home, session_rsa_key
+    mock_sleep, monkeypatch, temp_pyacme_home
 ):
-    monkeypatch.setattr(helper, "ACME_POLL_ATTEMPTS", 3)
+    monkeypatch.setattr(client, "ACME_POLL_ATTEMPTS", 3)
     resp = MagicMock()
     resp.json.return_value = {"status": "processing"}
-    session = MagicMock()
+    acme = _acme()
+    order = client.Order(
+        url="https://ca/order/1",
+        authorizations=[],
+        finalize_url="https://ca/finalize/1",
+    )
     with (
-        patch.object(helper, "post_jws", return_value=resp),
-        patch.object(
-            helper, "load_or_make_rsa_key", return_value=session_rsa_key
-        ),
+        patch.object(client, "post_jws", return_value=resp),
         pytest.raises(TimeoutError, match="still 'processing'"),
     ):
-        helper.finalize_order(
-            session,
-            session_rsa_key,
-            "https://ca/acct/1",
-            "https://ca/nonce",
-            {"finalize": "https://ca/finalize/1"},
-            ["example.com"],
-            "https://ca/order/1",
-        )
-    session.get.assert_not_called()
+        operations.finalize_order(acme, order, ["example.com"])
+    acme.session.get.assert_not_called()
+    # Nothing is installed when issuance fails.
+    assert not os.path.exists(
+        os.path.join(temp_pyacme_home, "example.com", "cert.pem")
+    )
 
 
 def _write_cert(home, domain):

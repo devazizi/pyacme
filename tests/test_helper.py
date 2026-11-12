@@ -13,7 +13,7 @@ from pyacmecli.acme.helper import (
     LETSENCRYPT_PRODUCTION_DIRECTORY,
     LETSENCRYPT_STAGING_DIRECTORY,
     b64u,
-    ensure_account,
+    connect_account,
     create_csr,
     extract_domains_for_renewal,
     get_directory_url,
@@ -172,29 +172,41 @@ def test_create_csr(session_rsa_key):
 # ============================================================================
 
 
-def test_ensure_account_registers_once_per_ca(temp_pyacme_home):
+def test_connect_account_registers_once_per_ca(
+    temp_pyacme_home, fake_acme, cert_pem_factory
+):
     """One shared account per CA directory, registered on first use only."""
-    session = MagicMock()
-    session.head.return_value = MagicMock(headers={"Replay-Nonce": "n1"})
-    acct_resp = MagicMock(status_code=201)
-    acct_resp.headers = {"Location": "https://acme.org/acct/98765"}
-    session.post.return_value = acct_resp
-    directory = {
-        "newNonce": "https://acme.org/newNonce",
-        "newAccount": "https://acme.org/newAccount",
-    }
-    url = "https://acme.org/directory"
+    fake = fake_acme(cert_pem_factory(["example.com"])[0])
+    url = "https://acme.test/directory"
 
-    first = ensure_account(session, directory, url, "admin@example.com")
-    second = ensure_account(session, directory, url, "admin@example.com")
+    first_dir, first = connect_account(url, "admin@example.com")
+    second_dir, second = connect_account(url, "admin@example.com")
 
-    assert first[0] == second[0] == "accounts/acme.org_directory"
-    assert first[2] == second[2] == "https://acme.org/acct/98765"
-    assert session.post.call_count == 1
+    assert first_dir == second_dir == "accounts/acme.test_directory"
+    assert first.account_url == second.account_url == "https://acme.test/acct/1"
+    assert len(fake.payloads("/new-account")) == 1
     result_path = os.path.join(
-        temp_pyacme_home, "accounts", "acme.org_directory", "account_url.result"
+        temp_pyacme_home,
+        "accounts",
+        "acme.test_directory",
+        "account_url.result",
     )
     assert os.stat(result_path).st_mode & 0o777 == 0o600
+
+
+def test_connect_account_without_register_requires_existing_url(
+    temp_pyacme_home, fake_acme, cert_pem_factory
+):
+    """Revocation must not silently create a new account."""
+    fake = fake_acme(cert_pem_factory(["example.com"])[0])
+    with pytest.raises(RuntimeError, match="account URL file"):
+        connect_account(
+            "https://acme.test/directory",
+            "a@example.com",
+            account_dir="example.com",
+            register=False,
+        )
+    assert fake.payloads("/new-account") == []
 
 
 # ============================================================================
@@ -273,7 +285,7 @@ def test_renew_certificate_single_domain_no_duplicate_identifiers(
 
     fake = fake_acme(cert_pem)
     with (
-        patch("pyacmecli.acme.helper.wait_for_dns"),
+        patch("pyacmecli.acme.dnscheck.wait_for_dns"),
         patch("builtins.input", return_value=""),
     ):
         renew_certificate(json_path)
@@ -334,7 +346,7 @@ def test_renew_certificate_multi_san_domains(
 
     fake = fake_acme(cert_pem)
     with (
-        patch("pyacmecli.acme.helper.wait_for_dns"),
+        patch("pyacmecli.acme.dnscheck.wait_for_dns"),
         patch("builtins.input", return_value=""),
     ):
         renew_certificate(json_path)

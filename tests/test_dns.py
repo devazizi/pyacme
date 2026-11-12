@@ -6,7 +6,7 @@ import dns.name
 import dns.resolver
 import pytest
 
-from pyacmecli.acme import helper
+from pyacmecli.acme import dnscheck, operations
 from pyacmecli.acme.helper import find_authoritative_servers  # unpatched
 from pyacmecli.webhooks.cloudflare import Cloudflare
 from tests.test_reliability import _authz, _run_challenge
@@ -37,7 +37,7 @@ def test_wait_for_dns_requires_every_authoritative_server(
             return result
 
     monkeypatch.setattr("dns.resolver.Resolver", FakeResolver)
-    helper.wait_for_dns(
+    dnscheck.wait_for_dns(
         "_acme-challenge.example.com",
         "tok",
         interval=1,
@@ -101,7 +101,7 @@ def test_txt_record_is_removed_after_failed_validation(mock_sleep):
 
 
 def test_txt_record_is_removed_after_successful_validation(mock_sleep):
-    with patch.object(helper, "_cleanup_txt_record") as cleanup:
+    with patch.object(operations, "_cleanup_txt_record") as cleanup:
         _run_challenge([_authz("valid")])
     assert cleanup.call_count == 2
 
@@ -109,7 +109,7 @@ def test_txt_record_is_removed_after_successful_validation(mock_sleep):
 def test_cleanup_failure_is_only_logged():
     provider = MagicMock()
     provider.delete_txt_record.side_effect = RuntimeError("API down")
-    helper._cleanup_txt_record(provider, "_acme-challenge.example.com")
+    operations._cleanup_txt_record(provider, "_acme-challenge.example.com")
 
 
 def test_cloudflare_deletes_only_the_exact_record():

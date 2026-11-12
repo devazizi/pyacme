@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pyacmecli.acme import helper
+from pyacmecli.acme import client, dnscheck, operations
 from tests.conftest import FakeResponse
 
 
@@ -22,7 +22,7 @@ def _session(responses):
 def _nonces(session):
     return [
         json.loads(
-            helper.base64.urlsafe_b64decode(
+            client.base64.urlsafe_b64decode(
                 c.kwargs["json"]["protected"] + "=="
             )
         )["nonce"]
@@ -42,7 +42,7 @@ def test_bad_nonce_is_retried_with_the_returned_nonce(session_rsa_key):
     bad = _problem(400, "badNonce", headers={"Replay-Nonce": "fresh-1"})
     session = _session([bad, FakeResponse(200, {"ok": True})])
 
-    resp = helper.post_jws(
+    resp = client.post_jws(
         session,
         "https://ca/x",
         {},
@@ -58,8 +58,8 @@ def test_bad_nonce_is_retried_with_the_returned_nonce(session_rsa_key):
 
 def test_other_client_errors_are_not_retried(session_rsa_key):
     session = _session([_problem(400, "malformed")])
-    with pytest.raises(helper.AcmeError, match="malformed") as excinfo:
-        helper.post_jws(
+    with pytest.raises(client.AcmeError, match="malformed") as excinfo:
+        client.post_jws(
             session,
             "https://ca/x",
             {},
@@ -74,7 +74,7 @@ def test_other_client_errors_are_not_retried(session_rsa_key):
 def test_short_retry_after_is_honoured(session_rsa_key, mock_sleep):
     busy = _problem(503, "serverInternal", headers={"Retry-After": "2"})
     session = _session([busy, FakeResponse(200, {})])
-    helper.post_jws(
+    client.post_jws(
         session, "https://ca/x", {}, session_rsa_key, "https://ca/n", kid="k"
     )
     mock_sleep.assert_called_once_with(2.0)
@@ -84,8 +84,8 @@ def test_short_retry_after_is_honoured(session_rsa_key, mock_sleep):
 def test_long_rate_limit_fails_fast(session_rsa_key, mock_sleep):
     limited = _problem(429, "rateLimited", headers={"Retry-After": "3600"})
     session = _session([limited])
-    with pytest.raises(helper.AcmeError, match="retry after 3600s"):
-        helper.post_jws(
+    with pytest.raises(client.AcmeError, match="retry after 3600s"):
+        client.post_jws(
             session,
             "https://ca/x",
             {},
@@ -111,10 +111,12 @@ def test_issue_wildcard_and_apex_end_to_end(
     provider = MagicMock()
 
     with (
-        patch.object(helper, "dns_challenge_provider", return_value=provider),
-        patch.object(helper, "wait_for_dns"),
+        patch.object(
+            operations, "dns_challenge_provider", return_value=provider
+        ),
+        patch.object(dnscheck, "wait_for_dns"),
     ):
-        helper.get_certificate_for_domains_dns(
+        operations.get_certificate_for_domains_dns(
             domains, "cloudflare", "a@example.com", "token", "true"
         )
 
@@ -127,3 +129,6 @@ def test_issue_wildcard_and_apex_end_to_end(
     assert meta["key_type"] == "rsa2048"
     assert len(fake.payloads("/new-order")) == 1
     assert provider.add_txt_record.call_count == 2
+    # AcmeClient reuses each Replay-Nonce, so only the first request needs
+    # a newNonce round trip.
+    assert fake.session.head.call_count == 1

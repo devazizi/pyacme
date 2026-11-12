@@ -9,19 +9,21 @@ from datetime import datetime, timedelta, timezone
 import click
 from tabulate import tabulate
 
-from pyacmecli.acme.helper import (
+from pyacmecli.acme import storage
+from pyacmecli.acme.operations import (
     DEFAULT_KEY_TYPE,
     KEY_TYPES,
-    PYACME_HOME_PATH,
-    delete_certificate_data,
     export_certificate,
     get_certificate_for_domains_dns,
-    init_dir,
     inspect_certificate,
-    pyacme_lock,
-    renewal_window,
     renew_certificate,
+    renewal_window,
     revoke_certificate,
+)
+from pyacmecli.acme.storage import (
+    delete_certificate_data,
+    init_dir,
+    pyacme_lock,
     validate_domain_name,
 )
 from pyacmecli.common.certificates import get_certificate_list
@@ -255,7 +257,7 @@ def init_pyacme_project(ctx: click.Context) -> None:
 @click.pass_context
 def certificate_list(ctx: click.Context, as_json: bool = False) -> None:
     """List all certificates in the pyacme home directory."""
-    base_dir = os.path.expanduser(PYACME_HOME_PATH)
+    base_dir = storage.home()
 
     if not os.path.exists(base_dir):
         if as_json:
@@ -485,7 +487,7 @@ def certificate_renew(
         else (True if (ctx.obj or {}).get("STAGING") else None)
     )
 
-    base_dir = os.path.expanduser(PYACME_HOME_PATH)
+    base_dir = storage.home()
 
     if not os.path.exists(base_dir):
         click.echo(f"Directory {base_dir} does not exist.")

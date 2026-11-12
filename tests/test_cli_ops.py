@@ -35,7 +35,7 @@ def test_inspect_command(tmp_path, cert_pem_factory):
     )
 
     runner = CliRunner()
-    with patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(tmp_path)):
+    with patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)):
         result = runner.invoke(main_command, ["inspect", domain])
         assert result.exit_code == 0
         assert domain in result.output
@@ -53,7 +53,7 @@ def test_delete_command(tmp_path):
     (domain_dir / "cert.pem").write_text("dummy cert")
 
     runner = CliRunner()
-    with patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(tmp_path)):
+    with patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)):
         # Test abort on prompt 'n'
         res_abort = runner.invoke(main_command, ["delete", domain], input="n\n")
         assert res_abort.exit_code != 0
@@ -82,7 +82,7 @@ def test_export_command_pem_and_pfx(tmp_path, cert_pem_factory):
     bundle_out = tmp_path / "out-bundle.pem"
     pfx_out = tmp_path / "out.pfx"
 
-    with patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(tmp_path)):
+    with patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)):
         # Export pem-bundle
         res_pem = runner.invoke(
             main_command,
@@ -139,17 +139,17 @@ def test_revoke_command(tmp_path, cert_pem_factory, session_rsa_key):
 
     runner = CliRunner()
     with (
-        patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(tmp_path)),
-        patch("pyacmecli.acme.helper.get_directory") as mock_dir,
+        patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(tmp_path)),
+        patch("pyacmecli.acme.client.get_directory") as mock_dir,
         patch(
-            "pyacmecli.acme.helper.load_or_make_rsa_key",
+            "pyacmecli.acme.storage.load_or_make_rsa_key",
             return_value=session_rsa_key,
         ),
         patch(
-            "pyacmecli.acme.helper.account_directory_url",
+            "pyacmecli.acme.storage.account_directory_url",
             return_value="http://acc",
         ),
-        patch("pyacmecli.acme.helper.post_jws") as mock_post,
+        patch("pyacmecli.acme.client.post_jws") as mock_post,
     ):
         mock_dir.return_value = {
             "newNonce": "http://nonce",
@@ -181,7 +181,7 @@ def test_unsafe_domain_names_are_rejected(tmp_path, name):
     victim.write_text("keep")
 
     runner = CliRunner()
-    with patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(home)):
+    with patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(home)):
         for args in (
             ["delete", "--yes", "--", name],
             ["inspect", "--", name],
@@ -232,7 +232,7 @@ def test_secret_files_are_owner_only(tmp_path, cert_pem_factory):
     (domain_dir / "cert.pem").write_bytes(cert_pem)
     (domain_dir / "privkey.pem").write_bytes(key_pem)
 
-    with patch("pyacmecli.acme.helper.PYACME_HOME_PATH", str(home)):
+    with patch("pyacmecli.acme.storage.PYACME_HOME_PATH", str(home)):
         load_or_make_rsa_key("example.com/account.key.pem")
         assert mode(domain_dir / "account.key.pem") == 0o600
 

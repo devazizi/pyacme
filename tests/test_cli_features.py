@@ -135,7 +135,7 @@ def test_renewal_reuses_stored_directory_url(
     temp_pyacme_home, cert_pem_factory, fake_acme, mock_sleep, monkeypatch
 ):
     """A certificate issued from a custom CA is renewed from that CA."""
-    from pyacmecli.acme import helper
+    from pyacmecli.acme import client, dnscheck, operations
 
     domain_dir = os.path.join(temp_pyacme_home, "example.com")
     os.makedirs(domain_dir)
@@ -162,16 +162,16 @@ def test_renewal_reuses_stored_directory_url(
 
     fake_acme(cert_pem)
     seen = []
-    real = helper.get_directory_url
+    real = client.get_directory_url
     monkeypatch.setattr(
-        helper,
+        client,
         "get_directory_url",
         lambda staging=False, custom_url=None: seen.append(custom_url)
         or real(staging, custom_url),
     )
     with (
-        patch.object(helper, "wait_for_dns"),
+        patch.object(dnscheck, "wait_for_dns"),
         patch("builtins.input", return_value=""),
     ):
-        helper.renew_certificate(json_path)
+        operations.renew_certificate(json_path)
     assert seen == ["https://acme.test/directory"]

@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from pyacmecli.__main__ import main_command
-from pyacmecli.acme import helper
+from pyacmecli.acme import dnscheck, operations, storage
 
 
 def _issue(domains, cert_pem_factory, fake_acme, **kwargs):
@@ -16,11 +16,11 @@ def _issue(domains, cert_pem_factory, fake_acme, **kwargs):
     fake = fake_acme(cert_pem)
     with (
         patch.object(
-            helper, "dns_challenge_provider", return_value=MagicMock()
+            operations, "dns_challenge_provider", return_value=MagicMock()
         ),
-        patch.object(helper, "wait_for_dns"),
+        patch.object(dnscheck, "wait_for_dns"),
     ):
-        helper.get_certificate_for_domains_dns(
+        operations.get_certificate_for_domains_dns(
             domains, "cloudflare", "a@example.com", "cf-token", "true", **kwargs
         )
     return fake
@@ -64,11 +64,11 @@ def test_renewal_without_legacy_account_uses_shared_account(
     fake = fake_acme(cert_pem)
     with (
         patch.object(
-            helper, "dns_challenge_provider", return_value=MagicMock()
+            operations, "dns_challenge_provider", return_value=MagicMock()
         ),
-        patch.object(helper, "wait_for_dns"),
+        patch.object(dnscheck, "wait_for_dns"),
     ):
-        helper.renew_certificate(json_path)
+        operations.renew_certificate(json_path)
 
     # The shared account already exists on disk, so nothing is registered.
     assert fake.payloads("/new-account") == []
@@ -82,19 +82,19 @@ def test_renewal_without_legacy_account_uses_shared_account(
 )
 def test_tampered_account_reference_is_rejected(bad):
     with pytest.raises(RuntimeError, match="Invalid account reference"):
-        helper.resolve_account_dir({"account": bad}, "example.com")
+        storage.resolve_account_dir({"account": bad}, "example.com")
 
 
 def test_token_from_environment_overrides_stored(monkeypatch):
     monkeypatch.setenv("PYACME_CLOUDFLARE_TOKEN", "rotated")
-    assert helper.resolve_access_token("cloudflare", "stale") == "rotated"
+    assert operations.resolve_access_token("cloudflare", "stale") == "rotated"
 
 
 def test_missing_required_token_names_the_variable(monkeypatch):
     monkeypatch.delenv("PYACME_CLOUDFLARE_TOKEN", raising=False)
     with pytest.raises(RuntimeError, match="PYACME_CLOUDFLARE_TOKEN"):
-        helper.resolve_access_token("cloudflare", None)
-    assert helper.resolve_access_token("route53", None) is None
+        operations.resolve_access_token("cloudflare", None)
+    assert operations.resolve_access_token("route53", None) is None
 
 
 def test_no_store_token_keeps_credential_out_of_metadata(

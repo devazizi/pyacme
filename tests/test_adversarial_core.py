@@ -461,7 +461,9 @@ def test_r4_renew_certificate_folder_name_alignment(
     """Stress test renew_certificate: ensure primary_domain is aligned with folder name."""
     home_dir = tmp_path / ".pyacme"
     home_dir.mkdir()
-    monkeypatch.setattr("pyacmecli.acme.helper.PYACME_HOME_PATH", str(home_dir))
+    monkeypatch.setattr(
+        "pyacmecli.acme.storage.PYACME_HOME_PATH", str(home_dir)
+    )
 
     # Folder is named 'admin.portal.com', but cert_data['domains'] has 'portal.com' first
     folder_domain = "admin.portal.com"
@@ -493,7 +495,7 @@ def test_r4_renew_certificate_folder_name_alignment(
     mock_session = MagicMock()
     monkeypatch.setattr("requests.Session", lambda: mock_session)
     monkeypatch.setattr(
-        "pyacmecli.acme.helper.get_directory",
+        "pyacmecli.acme.client.get_directory",
         lambda s, u: {
             "newNonce": "https://acme.test/nonce",
             "newOrder": "https://acme.test/new-order",
@@ -527,7 +529,7 @@ def test_r4_renew_certificate_folder_name_alignment(
         resp.json.return_value = {}
         return resp
 
-    monkeypatch.setattr("pyacmecli.acme.helper.post_jws", mock_post_jws)
+    monkeypatch.setattr("pyacmecli.acme.client.post_jws", mock_post_jws)
 
     mock_cert_resp = MagicMock()
     mock_cert_resp.text = cert_pem.decode("utf-8")

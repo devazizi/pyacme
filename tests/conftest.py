@@ -28,8 +28,7 @@ def clean_logger():
 def isolate_pyacme_home(tmp_path, monkeypatch):
     """Never let a test read or write the real ~/.pyacme (e.g. the lock)."""
     home_dir = str(tmp_path / "default-pyacme-home")
-    monkeypatch.setattr("pyacmecli.acme.helper.PYACME_HOME_PATH", home_dir)
-    monkeypatch.setattr("pyacmecli.__main__.PYACME_HOME_PATH", home_dir)
+    monkeypatch.setattr("pyacmecli.acme.storage.PYACME_HOME_PATH", home_dir)
     return home_dir
 
 
@@ -37,7 +36,7 @@ def isolate_pyacme_home(tmp_path, monkeypatch):
 def no_authoritative_dns_lookup(monkeypatch):
     """Keep tests offline: skip nameserver discovery unless a test opts in."""
     monkeypatch.setattr(
-        "pyacmecli.acme.helper.find_authoritative_servers",
+        "pyacmecli.acme.dnscheck.find_authoritative_servers",
         lambda name: (name, None),
     )
 
@@ -54,8 +53,7 @@ def mock_sleep(monkeypatch):
 def temp_pyacme_home(tmp_path, monkeypatch):
     """Isolate tests from ~/.pyacme using a temporary directory."""
     home_dir = str(tmp_path / ".pyacme")
-    monkeypatch.setattr("pyacmecli.acme.helper.PYACME_HOME_PATH", home_dir)
-    monkeypatch.setattr("pyacmecli.__main__.PYACME_HOME_PATH", home_dir)
+    monkeypatch.setattr("pyacmecli.acme.storage.PYACME_HOME_PATH", home_dir)
     return home_dir
 
 
@@ -239,7 +237,7 @@ def fake_acme(monkeypatch):
         fake = FakeAcme(cert_pem, **kwargs)
         monkeypatch.setattr("requests.Session", lambda: fake.session)
         monkeypatch.setattr(
-            "pyacmecli.acme.helper.get_directory_url",
+            "pyacmecli.acme.client.get_directory_url",
             lambda staging=False, custom_url=None: f"{FakeAcme.BASE}/directory",
         )
         return fake
