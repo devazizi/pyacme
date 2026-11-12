@@ -4,6 +4,8 @@ Every path is derived from PYACME_HOME_PATH at call time, so tests and
 callers can redirect the whole store by patching that one attribute.
 """
 
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -180,4 +182,81 @@ def delete_certificate_data(domain: str) -> bool:
     if not os.path.exists(domain_dir):
         return False
     shutil.rmtree(domain_dir)
+    return True
+
+
+# Provider credentials live in credentials/<name>.json (directory 0700,
+# files 0600) and certificate.json only stores the name. A token shared by
+# several certificates is then stored, rotated and protected in one place,
+# and certificate.json can be read or copied without exposing it.
+CREDENTIAL_NAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+
+
+def credentials_dir() -> str:
+    return os.path.join(home(), "credentials")
+
+
+def validate_credential_name(name: str) -> str:
+    if not CREDENTIAL_NAME_RE.fullmatch(name) or ".." in name:
+        raise ValueError(
+            f"Invalid credential name {name!r}: use lowercase letters, "
+            "digits, '.', '_' or '-' (max 64 characters)"
+        )
+    return name
+
+
+def default_credential_name(provider: str, token: str) -> str:
+    """Stable name per (provider, token): the same token is stored once."""
+    digest = hashlib.sha256(f"{provider}\0{token}".encode()).hexdigest()
+    return f"{provider}-{digest[:8]}"
+
+
+def credential_path(name: str) -> str:
+    return os.path.join(
+        credentials_dir(), f"{validate_credential_name(name)}.json"
+    )
+
+
+def save_credential(name: str, provider: str, token: str) -> str:
+    """Store a provider credential (mode 0600); return its name."""
+    directory = credentials_dir()
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
+    write_private_file(
+        credential_path(name),
+        json.dumps({"provider": provider, "token": token}),
+    )
+    return name
+
+
+def load_credential(name: str) -> tuple[str, str]:
+    """Return (provider, token) of a stored credential."""
+    path = credential_path(name)
+    if not os.path.exists(path):
+        raise RuntimeError(
+            f"Credential {name!r} not found in {credentials_dir()}"
+        )
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return str(data["provider"]), str(data["token"])
+
+
+def list_credentials() -> list[tuple[str, str]]:
+    """Return (name, provider) of every stored credential; never tokens."""
+    directory = credentials_dir()
+    if not os.path.isdir(directory):
+        return []
+    result = []
+    for entry in sorted(os.listdir(directory)):
+        if entry.endswith(".json"):
+            name = entry.removesuffix(".json")
+            result.append((name, load_credential(name)[0]))
+    return result
+
+
+def delete_credential(name: str) -> bool:
+    path = credential_path(name)
+    if not os.path.exists(path):
+        return False
+    os.remove(path)
     return True

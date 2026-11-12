@@ -593,8 +593,17 @@ def certificate_renew(
     is_flag=True,
     default=False,
     help=(
-        "Do not save the credential in certificate.json; renewals then "
-        "read it from PYACME_<PROVIDER>_TOKEN."
+        "Do not store the token; renewals then read it from "
+        "PYACME_<PROVIDER>_TOKEN."
+    ),
+)
+@click.option(
+    "--credential",
+    "credential_name",
+    default=None,
+    help=(
+        "Name of a stored credential (see 'credentials list'). Without a "
+        "token it is used as is; with one, the token is saved under it."
     ),
 )
 @click.option("--email", help="Email address", required=True)
@@ -633,6 +642,7 @@ def certificate_new(
     log_file: str | None = None,
     key_type: str = DEFAULT_KEY_TYPE,
     no_store_token: bool = False,
+    credential_name: str | None = None,
 ) -> None:
     """Request a new certificate for the given domain(s) and provider."""
     effective_log_file = log_file or (ctx.obj or {}).get("LOG_FILE")
@@ -657,6 +667,20 @@ def certificate_new(
         )
 
     access_token = access_token or os.environ.get(provider_token_env(provider))
+    if credential_name:
+        try:
+            storage.validate_credential_name(credential_name)
+            if not access_token:
+                cred_provider, access_token = storage.load_credential(
+                    credential_name
+                )
+                if cred_provider != provider:
+                    raise click.ClickException(
+                        f"Credential {credential_name!r} is for "
+                        f"{cred_provider}, not {provider}"
+                    )
+        except (ValueError, RuntimeError) as exc:
+            raise click.ClickException(str(exc))
     if provider in TOKEN_REQUIRED_PROVIDERS and not access_token:
         raise click.ClickException(
             f"--access-token or {provider_token_env(provider)} required "
@@ -673,6 +697,91 @@ def certificate_new(
         directory_url=(ctx.obj or {}).get("DIRECTORY_URL"),
         key_type=key_type,
         store_token=not no_store_token,
+        credential_name=credential_name,
+    )
+
+
+@main_command.group(
+    name="credentials", help="Manage stored provider credentials"
+)
+def credentials_group() -> None:
+    """Credentials live in ~/.pyacme/credentials, one 0600 file each."""
+
+
+@credentials_group.command(name="list", help="List credential names")
+def credentials_list() -> None:
+    rows = storage.list_credentials()
+    users: dict[str, list[str]] = {}
+    for cert in (
+        get_certificate_list(storage.home())
+        if os.path.isdir(storage.home())
+        else []
+    ):
+        json_path = os.path.join(
+            os.path.dirname(cert.certificate_path), "certificate.json"
+        )
+        try:
+            with open(json_path, encoding="utf-8") as f:
+                ref = json.load(f).get("credential")
+        except (OSError, ValueError):
+            continue
+        if ref:
+            users.setdefault(ref, []).append(cert.domain)
+    click.echo(
+        tabulate(
+            [(n, p, ", ".join(users.get(n, [])) or "-") for n, p in rows],
+            headers=["Name", "Provider", "Used by"],
+            tablefmt="fancy_grid",
+        )
+    )
+
+
+@credentials_group.command(
+    name="set",
+    help=(
+        "Create or rotate a credential. The token is read from "
+        "PYACME_<PROVIDER>_TOKEN or prompted for without echo."
+    ),
+)
+@click.argument("name")
+@click.option(
+    "--provider",
+    type=click.Choice(SUPPORTABLE_PROVIDER),
+    required=True,
+    help="DNS provider the token belongs to.",
+)
+@locked
+def credentials_set(name: str, provider: str) -> None:
+    token = os.environ.get(provider_token_env(provider)) or click.prompt(
+        f"{provider} token", hide_input=True
+    )
+    try:
+        storage.save_credential(
+            storage.validate_credential_name(name), provider, token
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(f"Stored credential {name!r} for {provider}.")
+
+
+@credentials_group.command(name="delete", help="Delete a stored credential")
+@click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+@locked
+def credentials_delete(name: str, yes: bool = False) -> None:
+    if not yes:
+        click.confirm(
+            f"Delete credential {name!r}? Renewals that use it will fail.",
+            abort=True,
+        )
+    try:
+        deleted = storage.delete_credential(name)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(
+        f"Deleted credential {name!r}."
+        if deleted
+        else f"No credential named {name!r}."
     )
 
 

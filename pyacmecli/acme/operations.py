@@ -98,13 +98,26 @@ def dns_challenge_provider(
     return spec.factory(domain, access_token, f"{storage.home()}/{domain}")
 
 
-def resolve_access_token(provider: str, stored: str | None) -> str | None:
-    """Credential for provider: its environment variable, else the stored one.
+def resolve_access_token(
+    provider: str, stored: str | None = None, credential: str | None = None
+) -> str | None:
+    """Credential for provider, by precedence.
 
-    The variable wins so a rotated token can be supplied without editing
-    every certificate.json, and so tokens need not be stored at all.
+    1. PYACME_<PROVIDER>_TOKEN, so a token can be supplied or rotated
+       without touching stored files.
+    2. The named credential file referenced by certificate.json.
+    3. A token stored inline by versions before credential files
+       (provider_conf), migrated on the next successful renewal.
     """
-    token = os.environ.get(provider_token_env(provider)) or stored
+    token = os.environ.get(provider_token_env(provider))
+    if not token and credential:
+        cred_provider, token = storage.load_credential(credential)
+        if cred_provider != provider:
+            raise RuntimeError(
+                f"Credential {credential!r} belongs to {cred_provider!r}, "
+                f"not {provider!r}"
+            )
+    token = token or stored
     spec = PROVIDERS.get(provider)
     if spec and spec.token_required and not token:
         raise RuntimeError(
@@ -292,7 +305,14 @@ def get_certificate_for_domains_dns(
     directory_url: str | None = None,
     key_type: str = DEFAULT_KEY_TYPE,
     store_token: bool = True,
+    credential_name: str | None = None,
 ) -> None:
+    """Issue a certificate and record how to renew it.
+
+    With store_token the provider token is saved as a credential file
+    (credential_name, or a name derived from provider and token) and
+    certificate.json references it by name.
+    """
     target_directory = client.get_directory_url(
         staging=staging, custom_url=directory_url
     )
@@ -308,7 +328,7 @@ def get_certificate_for_domains_dns(
         renew_before_days=20,
         renew_command=renew_command,
         provider=dns_provider,
-        provider_conf=access_token if store_token else None,
+        provider_conf=None,
         email=email,
     )
     cert.domains = domains
@@ -316,6 +336,15 @@ def get_certificate_for_domains_dns(
     cert.key_type = key_type
     cert.directory_url = directory_url
     cert.account = account_dir
+    if store_token and access_token:
+        cert.credential = storage.save_credential(
+            credential_name
+            or storage.default_credential_name(dns_provider, access_token),
+            dns_provider,
+            access_token,
+        )
+    elif credential_name:
+        cert.credential = credential_name
 
     cert.save(f"{home}/{domains[0]}/certificate.json")
 
@@ -350,7 +379,9 @@ def renew_certificate(
 
     dns_provider = cert_data["provider"]
     access_token = resolve_access_token(
-        dns_provider, cert_data.get("provider_conf")
+        dns_provider,
+        stored=cert_data.get("provider_conf"),
+        credential=cert_data.get("credential"),
     )
 
     domains = extract_domains_for_renewal(cert_data, cert_dir)
@@ -416,11 +447,26 @@ def renew_certificate(
     )
     if is_staging:
         cert_data["staging"] = True
+    _migrate_inline_token(cert_data, dns_provider)
 
     write_private_file(cert_json_path, json.dumps(cert_data, indent=4))
 
     LOG.info(
         f"Renewal successful for {primary_domain} (domains: {ordered_domains})"
+    )
+
+
+def _migrate_inline_token(cert_data: CertData, provider: str) -> None:
+    """Move a token stored inline in certificate.json to a credential file."""
+    token = cert_data.pop("provider_conf", None)
+    if not token or cert_data.get("credential"):
+        return
+    cert_data["credential"] = storage.save_credential(
+        storage.default_credential_name(provider, token), provider, token
+    )
+    LOG.info(
+        f"Moved the {provider} token out of certificate.json into "
+        f"credential {cert_data['credential']!r}"
     )
 
 
