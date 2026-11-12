@@ -1,143 +1,109 @@
-"""Hetzner DNS provider for ACME DNS-01 challenge."""
+"""Hetzner DNS provider for ACME DNS-01 challenge.
 
-from typing import Any
-import requests
+Two APIs are supported, chosen by the token: Hetzner Cloud DNS
+(api.hetzner.cloud, project API token) and the older Hetzner DNS console
+API (dns.hetzner.com, 32-character token).
+"""
 
 from pyacmecli.happylog import LOG
-from pyacmecli.webhooks.base import Base
-from pyacmecli.webhooks.func_helper import get_root_domain
+from pyacmecli.webhooks.base import HttpProvider, ZoneNotFoundError
+
+CLOUD_API = "https://api.hetzner.cloud/v1"
+DNS_CONSOLE_API = "https://dns.hetzner.com/api/v1"
 
 
-class HetznerZoneNotFoundError(Exception):
+class HetznerZoneNotFoundError(ZoneNotFoundError):
     """Raised when the Hetzner zone cannot be found for a domain."""
 
-    pass
 
+class Hetzner(HttpProvider):
+    """Hetzner DNS client for _acme-challenge TXT records."""
 
-class Hetzner(Base):
-    """Hetzner DNS API client for adding/deleting _acme-challenge TXT records."""
-
-    def __init__(self, domain: str, api_token: str) -> None:
-        self.api_token = api_token
-        self.domain = domain
-        self.root_domain = get_root_domain(domain)
-        self.is_cloud = len(api_token.strip()) != 32
-
+    def __init__(self, domain: str, api_token: str | None) -> None:
+        api_token = (api_token or "").strip()
+        self.is_cloud = len(api_token) != 32
         if self.is_cloud:
-            self.base_url = "https://api.hetzner.cloud/v1"
-            self.headers = {
-                "Authorization": f"Bearer {self.api_token}",
-                "Content-Type": "application/json",
-            }
+            self.base_url = CLOUD_API
+            headers = {"Authorization": f"Bearer {api_token}"}
         else:
-            self.base_url = "https://dns.hetzner.com/api/v1"
-            self.headers = {
-                "Auth-API-Token": self.api_token,
-                "Content-Type": "application/json",
-            }
-
-        self.zone_id = self._get_zone_id()
+            self.base_url = DNS_CONSOLE_API
+            headers = {"Auth-API-Token": api_token}
+        super().__init__(domain, headers)
         self.created_record_id: str | None = None
+        try:
+            _, self.zone_id = self.find_zone(self._zone_id)
+        except ZoneNotFoundError as exc:
+            raise HetznerZoneNotFoundError(str(exc)) from exc
 
-    def _get_zone_id(self) -> str:
-        if self.is_cloud:
-            resp = requests.get(
-                f"{self.base_url}/zones",
-                headers=self.headers,
-                params={"name": self.root_domain},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            zones = resp.json().get("zones", [])
-            for z in zones:
-                if z.get("name") == self.root_domain:
-                    return str(z["id"])
-        else:
-            resp = requests.get(
-                f"{self.base_url}/zones",
-                headers=self.headers,
-                params={"name": self.root_domain},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            zones = resp.json().get("zones", [])
-            for z in zones:
-                if z.get("name") == self.root_domain:
-                    return str(z["id"])
+    def _zone_id(self, zone: str) -> str | None:
+        # Both APIs accept GET /zones?name=<zone> and return {"zones": [...]}.
+        zones = self.json(
+            "GET", f"{self.base_url}/zones", params={"name": zone}
+        ).get("zones", [])
+        for z in zones:
+            if z.get("name") == zone:
+                return str(z["id"])
+        return None
 
-        raise HetznerZoneNotFoundError(
-            f"Zone not found on Hetzner for domain: {self.root_domain}"
-        )
-
-    def _relative_name(self, name: str) -> str:
-        relative = name.removesuffix(f".{self.root_domain}").removesuffix(".")
-        return relative if relative else "@"
+    def _rrset_url(self) -> str:
+        relative = self.relative_name(self.record_name)
+        return f"{self.base_url}/zones/{self.zone_id}/rrsets/{relative}/TXT"
 
     def add_txt_record(self, name: str, content: str, ttl: int = 120) -> None:
-        relative_name = self._relative_name(name)
-
+        relative = self.relative_name(name)
         if self.is_cloud:
-            url = f"{self.base_url}/zones/{self.zone_id}/rrsets/actions/set_records"
-            payload = {
-                "records": [{"value": f'"{content}"'}],
-                "type": "TXT",
-                "name": relative_name,
-                "ttl": ttl,
-            }
-            resp = requests.post(
-                url, headers=self.headers, json=payload, timeout=30
-            )
-            resp.raise_for_status()
-            LOG.debug("Added Hetzner Cloud TXT record for %s", name)
+            # TXT values must be quoted in the Cloud API.
+            records = [{"value": f'"{content}"'}]
+            existing = self.request("GET", self._rrset_url(), missing_ok=True)
+            if existing is None:
+                self.request(
+                    "POST",
+                    f"{self.base_url}/zones/{self.zone_id}/rrsets",
+                    json={
+                        "name": relative,
+                        "type": "TXT",
+                        "ttl": ttl,
+                        "records": records,
+                    },
+                )
+            else:
+                # Wildcard and apex share one record name; keep both values.
+                self.request(
+                    "POST",
+                    f"{self._rrset_url()}/actions/add_records",
+                    json={"records": records},
+                )
         else:
-            url = f"{self.base_url}/records"
-            payload = {
-                "zone_id": self.zone_id,
-                "type": "TXT",
-                "name": relative_name,
-                "value": content,
-                "ttl": ttl,
-            }
-            resp = requests.post(
-                url, headers=self.headers, json=payload, timeout=30
+            data = self.json(
+                "POST",
+                f"{self.base_url}/records",
+                json={
+                    "zone_id": self.zone_id,
+                    "type": "TXT",
+                    "name": relative,
+                    "value": content,
+                    "ttl": ttl,
+                },
             )
-            resp.raise_for_status()
-            data: dict[str, Any] = resp.json()
             self.created_record_id = data.get("record", {}).get("id")
-            LOG.debug(
-                "Added Hetzner DNS TXT record %s (id: %s)",
-                name,
-                self.created_record_id,
-            )
+        LOG.debug("Added Hetzner TXT record %s", name)
 
     def delete_txt_record(self) -> None:
         if self.is_cloud:
-            relative_name = f"_acme-challenge.{self.domain}".removesuffix(
-                f".{self.root_domain}"
-            ).removesuffix(".")
-            url = f"{self.base_url}/zones/{self.zone_id}/rrsets/{relative_name}/TXT"
-            try:
-                requests.delete(url, headers=self.headers, timeout=30)
-                LOG.debug(
-                    "Deleted Hetzner Cloud TXT record for %s", relative_name
+            self.request("DELETE", self._rrset_url(), missing_ok=True)
+            LOG.debug("Deleted Hetzner Cloud TXT rrset %s", self.record_name)
+            return
+
+        relative = self.relative_name(self.record_name)
+        records = self.json(
+            "GET", f"{self.base_url}/records", params={"zone_id": self.zone_id}
+        ).get("records", [])
+        for rec in records:
+            if rec.get("type") == "TXT" and rec.get("name") == relative:
+                self.request(
+                    "DELETE",
+                    f"{self.base_url}/records/{rec['id']}",
+                    missing_ok=True,
                 )
-            except Exception as exc:
-                LOG.warning(
-                    "Could not delete Hetzner Cloud TXT record: %s", exc
-                )
-        else:
-            if self.created_record_id:
-                url = f"{self.base_url}/records/{self.created_record_id}"
-                try:
-                    requests.delete(url, headers=self.headers, timeout=30)
-                    LOG.debug(
-                        "Deleted Hetzner DNS TXT record id %s",
-                        self.created_record_id,
-                    )
-                    self.created_record_id = None
-                except Exception as exc:
-                    LOG.warning(
-                        "Could not delete Hetzner record %s: %s",
-                        self.created_record_id,
-                        exc,
-                    )
+                LOG.debug("Deleted Hetzner DNS TXT record %s", rec["id"])
+        self.created_record_id = None

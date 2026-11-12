@@ -1,78 +1,69 @@
 """PowerDNS provider for ACME DNS-01 challenge."""
 
 import os
-import requests
 
 from pyacmecli.happylog import LOG
-from pyacmecli.webhooks.base import Base
-from pyacmecli.webhooks.func_helper import get_root_domain
+from pyacmecli.webhooks.base import HttpProvider
 
 
-class PowerDNS(Base):
-    """PowerDNS HTTP API client for adding/deleting _acme-challenge TXT records."""
+class PowerDNS(HttpProvider):
+    """PowerDNS HTTP API client for _acme-challenge TXT records.
 
-    def __init__(self, domain: str, api_token: str) -> None:
-        self.domain = domain
-        self.root_domain = get_root_domain(domain)
+    The credential is 'http://pdns-host:8081#api-key', or just the key with
+    the server URL in PDNS_SERVER (default http://localhost:8081).
+    """
 
-        # Support format 'http://pdns-host:8081#my-key' or just 'my-key' with PDNS_SERVER env
+    def __init__(self, domain: str, api_token: str | None) -> None:
+        api_token = api_token or ""
         if "#" in api_token:
-            self.server_url, self.api_key = api_token.split("#", 1)
+            server_url, api_key = api_token.split("#", 1)
         else:
-            self.server_url = os.environ.get(
-                "PDNS_SERVER", "http://localhost:8081"
-            )
-            self.api_key = api_token
+            server_url = os.environ.get("PDNS_SERVER", "http://localhost:8081")
+            api_key = api_token
+        super().__init__(domain, {"X-API-Key": api_key})
+        self.api_key = api_key
 
-        self.server_url = self.server_url.rstrip("/")
-        if not self.server_url.endswith("/api/v1"):
-            self.server_url += "/api/v1"
+        server_url = server_url.rstrip("/")
+        if not server_url.endswith("/api/v1"):
+            server_url += "/api/v1"
+        self.server_url = server_url
+        self.zones_url = f"{server_url}/servers/localhost/zones"
 
-        self.base_url = (
-            f"{self.server_url}/servers/localhost/zones/{self.root_domain}."
+        zone, _ = self.find_zone(self._zone_exists)
+        self.base_url = f"{self.zones_url}/{zone}."
+
+    def _zone_exists(self, zone: str) -> str | None:
+        # PowerDNS answers 404, or 422 on some versions, for unknown zones.
+        found = self.request(
+            "GET",
+            f"{self.zones_url}/{zone}.",
+            missing_ok=True,
+            missing_statuses=(404, 422),
         )
-        self.headers = {
-            "X-API-Key": self.api_key,
-            "Content-Type": "application/json",
-        }
-        self.last_record_name: str | None = None
+        return zone if found is not None else None
+
+    def _patch_rrset(self, rrset: dict[str, object]) -> None:
+        self.request("PATCH", self.base_url, json={"rrsets": [rrset]})
 
     def add_txt_record(self, name: str, content: str, ttl: int = 120) -> None:
-        self.last_record_name = name.rstrip(".") + "."
-        payload = {
-            "rrsets": [
-                {
-                    "name": self.last_record_name,
-                    "type": "TXT",
-                    "ttl": ttl,
-                    "changetype": "REPLACE",
-                    "records": [{"content": f'"{content}"', "disabled": False}],
-                }
-            ]
-        }
-        resp = requests.patch(
-            self.base_url, headers=self.headers, json=payload, timeout=30
+        self._patch_rrset(
+            {
+                "name": f"{name.rstrip('.')}.",
+                "type": "TXT",
+                "ttl": ttl,
+                "changetype": "REPLACE",
+                "records": [{"content": f'"{content}"', "disabled": False}],
+            }
         )
-        resp.raise_for_status()
-        LOG.debug("Added PowerDNS TXT record: %s", self.last_record_name)
+        LOG.debug("Added PowerDNS TXT record %s", name)
 
     def delete_txt_record(self) -> None:
-        if not self.last_record_name:
-            self.last_record_name = f"_acme-challenge.{self.domain}."
-        payload = {
-            "rrsets": [
-                {
-                    "name": self.last_record_name,
-                    "type": "TXT",
-                    "changetype": "DELETE",
-                }
-            ]
-        }
-        try:
-            resp = requests.patch(
-                self.base_url, headers=self.headers, json=payload, timeout=30
-            )
-            resp.raise_for_status()
-            LOG.debug("Deleted PowerDNS TXT record: %s", self.last_record_name)
-        except Exception as exc:
-            LOG.warning("Could not delete PowerDNS TXT record: %s", exc)
+        # Deleting an rrset that does not exist succeeds in PowerDNS.
+        self._patch_rrset(
+            {
+                "name": f"{self.record_name}.",
+                "type": "TXT",
+                "changetype": "DELETE",
+            }
+        )
+        LOG.debug("Deleted PowerDNS TXT record %s", self.record_name)

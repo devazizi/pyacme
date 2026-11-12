@@ -3,6 +3,7 @@
 import base64
 import datetime
 import json
+import socket
 from datetime import timezone
 from unittest.mock import MagicMock
 
@@ -22,6 +23,19 @@ def clean_logger():
     remove_file_handlers()
     yield
     remove_file_handlers()
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Fail any test that tries to open a network connection."""
+
+    def guard(self, address, *args, **kwargs):
+        if self.family in (socket.AF_INET, socket.AF_INET6):
+            raise RuntimeError(f"test tried to connect to {address}")
+        return real_connect(self, address, *args, **kwargs)
+
+    real_connect = socket.socket.connect
+    monkeypatch.setattr(socket.socket, "connect", guard)
 
 
 @pytest.fixture(autouse=True)

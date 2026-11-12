@@ -2,55 +2,38 @@
 
 from typing import Any
 
-import requests
-
 from pyacmecli.happylog import LOG
-from pyacmecli.webhooks.base import Base
-from pyacmecli.webhooks.func_helper import get_root_domain
+from pyacmecli.webhooks.base import HttpProvider, ZoneNotFoundError
+
+API = "https://api.cloudflare.com/client/v4"
 
 
-class CloudflareZoneNotFoundError(Exception):
-    """Raised when the Cloudflare zone ID cannot be resolved for a domain."""
-
-    pass
+class CloudflareZoneNotFoundError(ZoneNotFoundError):
+    """Raised when no Cloudflare zone contains the domain."""
 
 
-class Cloudflare(Base):
-    """Cloudflare API client for adding/deleting _acme-challenge TXT records."""
+class Cloudflare(HttpProvider):
+    """Cloudflare API v4 client for _acme-challenge TXT records."""
 
-    def __init__(self, domain: str, api_token: str) -> None:
-        self.api_token = api_token
-        self.domain = domain
-        self.headers = {
-            "Authorization": f"Bearer {self.api_token}",
-            "Content-Type": "application/json",
-        }
-        zone_id = self._get_zone_id(domain)
-        self.base_url = (
-            f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
-        )
+    def __init__(self, domain: str, api_token: str | None) -> None:
+        super().__init__(domain, {"Authorization": f"Bearer {api_token}"})
+        try:
+            _, zone_id = self.find_zone(self._zone_id)
+        except ZoneNotFoundError as exc:
+            raise CloudflareZoneNotFoundError(str(exc)) from exc
+        self.base_url = f"{API}/zones/{zone_id}/dns_records"
 
-    def _get_zone_id(self, domain: str) -> str:
-        url = "https://api.cloudflare.com/client/v4/zones"
-        params = {"name": get_root_domain(domain)}
-        resp = requests.get(
-            url, headers=self.headers, params=params, timeout=30
-        )
-        resp.raise_for_status()
-        result: dict[str, Any] = resp.json()
-        if result.get("success") and result.get("result"):
-            return result["result"][0]["id"]
-        raise CloudflareZoneNotFoundError(
-            f"Zone ID not found for domain: {domain}"
-        )
+    def _zone_id(self, zone: str) -> str | None:
+        result = self.json("GET", f"{API}/zones", params={"name": zone})
+        zones = result.get("result") or []
+        return str(zones[0]["id"]) if zones else None
 
     def add_txt_record(self, name: str, content: str, ttl: int = 120) -> None:
-        payload = {"type": "TXT", "name": name, "content": content, "ttl": ttl}
-        response = requests.post(
-            self.base_url, headers=self.headers, json=payload, timeout=30
+        result: dict[str, Any] = self.json(
+            "POST",
+            self.base_url,
+            json={"type": "TXT", "name": name, "content": content, "ttl": ttl},
         )
-        response.raise_for_status()
-        result: dict[str, Any] = response.json()
         if not result.get("success"):
             raise RuntimeError(
                 f"Cloudflare rejected TXT record {name}: {result.get('errors')}"
@@ -58,28 +41,14 @@ class Cloudflare(Base):
         LOG.debug("Added Cloudflare TXT record %s", name)
 
     def delete_txt_record(self) -> None:
-        """Delete TXT records named exactly _acme-challenge.<domain>.
-
-        The name filter is exact on the API side and checked again here, so
-        records of sibling names (e.g. _acme-challenge.app2 when cleaning
-        _acme-challenge.app) are never touched.
-        """
-        record_name = f"_acme-challenge.{self.domain}"
-        resp = requests.get(
+        records = self.json(
+            "GET",
             self.base_url,
-            headers=self.headers,
-            params={"type": "TXT", "name": record_name, "per_page": 100},
-            timeout=30,
-        )
-        resp.raise_for_status()
-
-        for record in resp.json().get("result", []):
-            if record.get("name") != record_name:
+            params={"type": "TXT", "name": self.record_name, "per_page": 100},
+        ).get("result", [])
+        for record in records:
+            # The API filter is exact; checking again protects sibling names.
+            if record.get("name") != self.record_name:
                 continue
-            del_resp = requests.delete(
-                f"{self.base_url}/{record['id']}",
-                headers=self.headers,
-                timeout=30,
-            )
-            del_resp.raise_for_status()
+            self.request("DELETE", f"{self.base_url}/{record['id']}")
             LOG.debug("Deleted Cloudflare TXT record %s", record["id"])

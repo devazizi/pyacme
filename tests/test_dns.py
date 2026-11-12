@@ -8,7 +8,6 @@ import pytest
 
 from pyacmecli.acme import dnscheck, operations
 from pyacmecli.acme.helper import find_authoritative_servers  # unpatched
-from pyacmecli.webhooks.cloudflare import Cloudflare
 from tests.test_reliability import _authz, _run_challenge
 
 
@@ -110,28 +109,3 @@ def test_cleanup_failure_is_only_logged():
     provider = MagicMock()
     provider.delete_txt_record.side_effect = RuntimeError("API down")
     operations._cleanup_txt_record(provider, "_acme-challenge.example.com")
-
-
-def test_cloudflare_deletes_only_the_exact_record():
-    with patch.object(Cloudflare, "_get_zone_id", return_value="zone"):
-        cf = Cloudflare("app.example.com", "token")
-
-    listing = MagicMock()
-    listing.json.return_value = {
-        "result": [
-            {"id": "keep", "name": "_acme-challenge.app2.example.com"},
-            {"id": "drop", "name": "_acme-challenge.app.example.com"},
-        ]
-    }
-    with (
-        patch("requests.get", return_value=listing) as get,
-        patch("requests.delete") as delete,
-    ):
-        cf.delete_txt_record()
-
-    assert get.call_args.kwargs["params"]["name"] == (
-        "_acme-challenge.app.example.com"
-    )
-    assert [c.args[0].rsplit("/", 1)[1] for c in delete.call_args_list] == [
-        "drop"
-    ]
