@@ -162,3 +162,34 @@ def test_renew_command_return_value():
         side_effect=subprocess.CalledProcessError(1, "x", stderr="err"),
     ):
         assert run_renew_command_as_subprocess_command("x") is False
+
+
+def test_second_run_fails_while_lock_is_held(temp_pyacme_home):
+    from pyacmecli.acme.helper import pyacme_lock
+
+    with pyacme_lock():
+        result = CliRunner().invoke(main_command, ["cron"])
+    assert result.exit_code != 0
+    assert "Another pyacme process" in result.output
+
+    # Released after the block: the next run proceeds.
+    result = CliRunner().invoke(main_command, ["cron"])
+    assert result.exit_code == 0, result.output
+
+
+def test_write_atomic_keeps_old_file_when_write_fails(tmp_path):
+    from pyacmecli.common.fsutil import write_atomic
+
+    target = tmp_path / "cert.pem"
+    target.write_text("old")
+    with (
+        patch("os.replace", side_effect=OSError("disk full")),
+        pytest.raises(OSError),
+    ):
+        write_atomic(str(target), "new", 0o644)
+    assert target.read_text() == "old"
+    assert [p.name for p in tmp_path.iterdir()] == ["cert.pem"]
+
+    write_atomic(str(target), "new", 0o644)
+    assert target.read_text() == "new"
+    assert os.stat(target).st_mode & 0o777 == 0o644

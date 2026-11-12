@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509 import NameOID
 from validators import domain as domain_validator
 
-from pyacmecli.common.fsutil import write_private_file
+from pyacmecli.common.fsutil import exclusive_lock, write_private_file
 from pyacmecli.happylog import LOG
 from pyacmecli.tls.ssl_object import SSLCertificate
 from pyacmecli.webhooks.acmedns import AcmeDNS
@@ -75,6 +75,15 @@ def validate_domain_name(name: str) -> str:
 def certificate_dir(domain: str) -> str:
     """Return the storage directory of a certificate, rejecting unsafe names."""
     return os.path.join(PYACME_HOME_PATH, validate_domain_name(domain))
+
+
+def pyacme_lock():
+    """Serialize state-changing runs (new, cron, revoke, delete).
+
+    Two overlapping runs would otherwise race on the same key, certificate
+    and _acme-challenge TXT record.
+    """
+    return exclusive_lock(os.path.join(PYACME_HOME_PATH, ".lock"))
 
 
 def create_acme_account(

@@ -1,5 +1,6 @@
 """CLI entrypoint for pyacme - ACME/Let's Encrypt certificate management."""
 
+import functools
 import os
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -14,11 +15,13 @@ from pyacmecli.acme.helper import (
     get_certificate_for_domains_dns,
     init_dir,
     inspect_certificate,
+    pyacme_lock,
     renew_certificate,
     revoke_certificate,
     validate_domain_name,
 )
 from pyacmecli.common.certificates import get_certificate_list
+from pyacmecli.common.fsutil import LockBusyError
 from pyacmecli.happylog import (
     LOG,
     set_log_file,
@@ -57,6 +60,24 @@ CERTIFICATE_TABLE_HEADERS = [
     "Renew command",
     "Last Renew",
 ]
+
+
+def locked(func):
+    """Run a command while holding the pyacme lock."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            lock = pyacme_lock()
+            lock.__enter__()
+        except LockBusyError as exc:
+            raise click.ClickException(str(exc))
+        try:
+            return func(*args, **kwargs)
+        finally:
+            lock.__exit__(None, None, None)
+
+    return wrapper
 
 
 def run_renew_command_as_subprocess_command(renew_command: str | None) -> bool:
@@ -203,6 +224,7 @@ def certificate_inspect(ctx: click.Context, domain: str) -> None:
 @click.argument("domain")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
 @click.pass_context
+@locked
 def certificate_delete(
     ctx: click.Context, domain: str, yes: bool = False
 ) -> None:
@@ -288,6 +310,7 @@ def certificate_export(
 )
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
 @click.pass_context
+@locked
 def certificate_revoke(
     ctx: click.Context,
     domain: str,
@@ -330,6 +353,7 @@ def certificate_revoke(
     help="Optional file path to write log output.",
 )
 @click.pass_context
+@locked
 def certificate_renew(
     ctx: click.Context,
     force_renewal: bool = False,
@@ -432,6 +456,7 @@ def certificate_renew(
     help="Optional file path to write log output.",
 )
 @click.pass_context
+@locked
 def certificate_new(
     ctx: click.Context,
     domain: tuple[str, ...],

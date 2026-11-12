@@ -22,6 +22,15 @@ def clean_logger():
     remove_file_handlers()
 
 
+@pytest.fixture(autouse=True)
+def isolate_pyacme_home(tmp_path, monkeypatch):
+    """Never let a test read or write the real ~/.pyacme (e.g. the lock)."""
+    home_dir = str(tmp_path / "default-pyacme-home")
+    monkeypatch.setattr("pyacmecli.acme.helper.PYACME_HOME_PATH", home_dir)
+    monkeypatch.setattr("pyacmecli.__main__.PYACME_HOME_PATH", home_dir)
+    return home_dir
+
+
 @pytest.fixture
 def mock_sleep(monkeypatch):
     """Eliminate all sleep calls to ensure tests run instantly."""
