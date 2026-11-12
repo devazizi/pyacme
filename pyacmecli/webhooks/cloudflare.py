@@ -1,6 +1,5 @@
 """Cloudflare DNS provider for ACME DNS-01 challenge."""
 
-import time
 from typing import Any
 
 import requests
@@ -50,27 +49,37 @@ class Cloudflare(Base):
         response = requests.post(
             self.base_url, headers=self.headers, json=payload, timeout=30
         )
-        LOG.debug(
-            "Add TXT record status %s: %s",
-            response.status_code,
-            response.json(),
-        )
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        if not result.get("success"):
+            raise RuntimeError(
+                f"Cloudflare rejected TXT record {name}: {result.get('errors')}"
+            )
+        LOG.debug("Added Cloudflare TXT record %s", name)
 
     def delete_txt_record(self) -> None:
-        resp = requests.get(self.base_url, headers=self.headers, timeout=30)
-        # resp.raise_for_status()
+        """Delete TXT records named exactly _acme-challenge.<domain>.
 
-        records = resp.json().get("result", [])
-        for record in records:
-            if (
-                f"_acme-challenge.{self.domain.replace(f'.{get_root_domain(self.domain)}', '')}"
-                in record.get("name")
-            ):
-                record_id = record.get("id")
-                delete_url = f"{self.base_url}/{record_id}"
-                del_resp = requests.delete(
-                    delete_url, headers=self.headers, timeout=30
-                )
-                del_resp.raise_for_status()
-                LOG.debug(del_resp.json())
-                time.sleep(5)
+        The name filter is exact on the API side and checked again here, so
+        records of sibling names (e.g. _acme-challenge.app2 when cleaning
+        _acme-challenge.app) are never touched.
+        """
+        record_name = f"_acme-challenge.{self.domain}"
+        resp = requests.get(
+            self.base_url,
+            headers=self.headers,
+            params={"type": "TXT", "name": record_name, "per_page": 100},
+            timeout=30,
+        )
+        resp.raise_for_status()
+
+        for record in resp.json().get("result", []):
+            if record.get("name") != record_name:
+                continue
+            del_resp = requests.delete(
+                f"{self.base_url}/{record['id']}",
+                headers=self.headers,
+                timeout=30,
+            )
+            del_resp.raise_for_status()
+            LOG.debug("Deleted Cloudflare TXT record %s", record["id"])

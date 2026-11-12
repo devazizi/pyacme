@@ -58,18 +58,21 @@ class DigitalOcean(Base):
                 self.created_record_id = None
                 return
 
-        # Fallback: search and delete matching _acme-challenge records
+        # Fallback: delete records named exactly like our challenge record.
+        # Matching on a substring would also remove other hosts' challenges.
+        fqdn = f"_acme-challenge.{self.domain}"
+        relative = self._relative_name(fqdn)
         try:
             resp = requests.get(
                 self.base_url,
                 headers=self.headers,
-                params={"type": "TXT", "per_page": 100},
+                params={"type": "TXT", "name": fqdn, "per_page": 100},
                 timeout=30,
             )
             resp.raise_for_status()
             records = resp.json().get("domain_records", [])
             for rec in records:
-                if "_acme-challenge" in rec.get("name", ""):
+                if rec.get("name") == relative:
                     del_url = f"{self.base_url}/{rec['id']}"
                     requests.delete(del_url, headers=self.headers, timeout=30)
                     LOG.debug("Deleted DigitalOcean TXT record %s", rec["id"])

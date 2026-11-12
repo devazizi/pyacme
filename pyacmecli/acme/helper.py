@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 import dns.exception
+import dns.name
 import dns.resolver
 import requests
 from cryptography import x509
@@ -448,7 +449,8 @@ def perform_dns_challenge(
     LOG.info(f"TXT record name: {record_name}")
     LOG.info(f"TXT record value: {txt_value}")
     if dns_provider:
-        dns_provider.delete_txt_record()
+        # Clear leftovers of an interrupted earlier run first.
+        _cleanup_txt_record(dns_provider, record_name)
         dns_provider.add_txt_record(name=record_name, content=txt_value)
         LOG.info("Using DNS provider; TXT record set.")
     else:
@@ -460,35 +462,99 @@ def perform_dns_challenge(
             "Have you added the TXT record to your zone? Press Enter to continue. "
         )
 
-    wait_for_dns(record_name, txt_value)
+    try:
+        lookup_name, nameservers = find_authoritative_servers(record_name)
+        wait_for_dns(lookup_name, txt_value, nameservers=nameservers)
 
-    challenge_url = dns_challenge["url"]
-    post_jws(
-        session, challenge_url, {}, privkey, new_nonce_url, kid=account_url
-    )
+        challenge_url = dns_challenge["url"]
+        post_jws(
+            session, challenge_url, {}, privkey, new_nonce_url, kid=account_url
+        )
 
-    for _ in range(ACME_POLL_ATTEMPTS):
-        time.sleep(ACME_POLL_INTERVAL)
-        authz = post_as_get(
-            session, authz_url, privkey, new_nonce_url, account_url
-        ).json()
-        status = authz["status"]
-        if status == "valid":
-            return
-        if status in AUTHZ_FAILED_STATES:
-            errors = [
-                c["error"]
-                for c in authz.get("challenges", [])
-                if c.get("type") == "dns-01" and c.get("error")
-            ]
-            raise RuntimeError(
-                f"Authorization for {domain} is {status}: {errors or authz}"
+        for _ in range(ACME_POLL_ATTEMPTS):
+            time.sleep(ACME_POLL_INTERVAL)
+            authz = post_as_get(
+                session, authz_url, privkey, new_nonce_url, account_url
+            ).json()
+            status = authz["status"]
+            if status == "valid":
+                return
+            if status in AUTHZ_FAILED_STATES:
+                errors = [
+                    c["error"]
+                    for c in authz.get("challenges", [])
+                    if c.get("type") == "dns-01" and c.get("error")
+                ]
+                raise RuntimeError(
+                    f"Authorization for {domain} is {status}: {errors or authz}"
+                )
+
+        raise TimeoutError(
+            f"Authorization for {domain} still '{status}' after "
+            f"{ACME_POLL_ATTEMPTS * ACME_POLL_INTERVAL}s"
+        )
+    finally:
+        # The token is useless once the authorization is decided; leaving it
+        # only clutters the zone. Runs on failure too.
+        if dns_provider:
+            _cleanup_txt_record(dns_provider, record_name)
+        else:
+            LOG.info(f"You can now remove the TXT record {record_name}.")
+
+
+def _cleanup_txt_record(dns_provider: Base, record_name: str) -> None:
+    """Delete the challenge record; a failure here must not fail issuance."""
+    try:
+        dns_provider.delete_txt_record()
+    except Exception as exc:
+        LOG.warning(f"Could not delete TXT record {record_name}: {exc}")
+
+
+PUBLIC_RESOLVERS = ["1.1.1.1", "8.8.8.8"]
+
+
+def find_authoritative_servers(
+    record_name: str,
+) -> tuple[str, list[str] | None]:
+    """Return the name to query and the IPs of its authoritative servers.
+
+    The CA asks the authoritative servers directly, so checking them avoids
+    both stale negative caches on public resolvers and split-horizon
+    answers. CNAMEs are followed first (AcmeDNS delegates this way), since
+    the zone that must hold the TXT record is the CNAME target's zone.
+    Returns (record_name, None) when discovery fails, and the caller falls
+    back to public resolvers.
+    """
+    try:
+        resolver = dns.resolver.Resolver()
+        target = dns.name.from_text(record_name)
+        for _ in range(8):
+            try:
+                target = resolver.resolve(target, "CNAME")[0].target
+            except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+                break
+        zone = dns.resolver.zone_for_name(target, resolver=resolver)
+        addresses: set[str] = set()
+        for ns in resolver.resolve(zone, "NS"):
+            try:
+                addresses.update(
+                    r.address for r in resolver.resolve(ns.target, "A")
+                )
+            except dns.exception.DNSException as exc:
+                LOG.debug(f"Could not resolve nameserver {ns.target}: {exc}")
+        if addresses:
+            name = target.to_text(omit_final_dot=True)
+            LOG.info(
+                f"Checking {name} on authoritative servers of {zone}: "
+                f"{', '.join(sorted(addresses))}"
             )
-
-    raise TimeoutError(
-        f"Authorization for {domain} still '{status}' after "
-        f"{ACME_POLL_ATTEMPTS * ACME_POLL_INTERVAL}s"
-    )
+            return name, sorted(addresses)
+    except dns.exception.DNSException as exc:
+        LOG.warning(
+            f"Authoritative nameserver lookup for {record_name} failed ({exc}); "
+            "falling back to public resolvers"
+        )
+    return record_name, None
 
 
 def wait_for_dns(
@@ -497,8 +563,9 @@ def wait_for_dns(
     interval: int = 10,
     timeout: int = 300,
     max_retries: int | None = None,
+    nameservers: list[str] | None = None,
 ) -> None:
-    """Wait for DNS propagation of record_name with txt_value.
+    """Wait until record_name serves txt_value.
 
     Args:
         record_name: The TXT record name (e.g. _acme-challenge.example.com).
@@ -506,6 +573,9 @@ def wait_for_dns(
         interval: Time in seconds between polling attempts (default: 10).
         timeout: Total timeout in seconds before failing (default: 300).
         max_retries: Maximum number of polling attempts (default: None).
+        nameservers: Authoritative server IPs; every one of them must serve
+            the value, since the CA may ask any of them. When None, public
+            recursive resolvers are asked instead.
 
     Raises:
         TimeoutError: If DNS record does not match within timeout or max_retries.
@@ -514,10 +584,15 @@ def wait_for_dns(
         f"Waiting for DNS propagation of {record_name} (timeout={timeout}s, interval={interval}s)"
     )
 
-    resolver = dns.resolver.Resolver()
-    resolver.nameservers = ["1.1.1.1", "8.8.8.8"]
-    resolver.timeout = min(5.0, float(interval)) if interval > 0 else 5.0
-    resolver.lifetime = min(10.0, float(interval)) if interval > 0 else 10.0
+    groups = [[ip] for ip in nameservers] if nameservers else [PUBLIC_RESOLVERS]
+    resolvers = []
+    for group in groups:
+        resolver = dns.resolver.Resolver()
+        resolver.nameservers = group
+        resolver.timeout = min(5.0, float(interval)) if interval > 0 else 5.0
+        resolver.lifetime = min(10.0, float(interval)) if interval > 0 else 10.0
+        resolvers.append((group[0], resolver))
+    pending = list(resolvers)
 
     start_time = time.time()
     attempts = 0
@@ -526,26 +601,31 @@ def wait_for_dns(
         attempts += 1
         elapsed = time.time() - start_time
 
-        try:
-            answers = resolver.resolve(record_name, "TXT")
-            for rdata in answers:
-                txt_records = [txt.decode() for txt in rdata.strings]
-                if txt_value in txt_records:
-                    LOG.info(
-                        f"DNS record found for {record_name} after {attempts} attempt(s) ({elapsed:.1f}s)."
-                    )
-                    return
-            LOG.info("TXT record found, but value not matching. Retrying...")
-        except (
-            dns.resolver.NXDOMAIN,
-            dns.resolver.NoAnswer,
-            dns.resolver.NoNameservers,
-            dns.exception.Timeout,
-            dns.exception.DNSException,
-        ) as e:
-            LOG.warning(
-                f"DNS query failed or no answer yet (attempt {attempts}): {e}"
+        for server, resolver in list(pending):
+            try:
+                answers = resolver.resolve(record_name, "TXT")
+                found = any(
+                    txt_value in [txt.decode() for txt in rdata.strings]
+                    for rdata in answers
+                )
+                if found:
+                    pending.remove((server, resolver))
+                    continue
+                LOG.info(
+                    f"TXT record found on {server}, but value not matching. "
+                    "Retrying..."
+                )
+            except dns.exception.DNSException as e:
+                LOG.warning(
+                    f"DNS query to {server} failed or no answer yet "
+                    f"(attempt {attempts}): {e}"
+                )
+
+        if not pending:
+            LOG.info(
+                f"DNS record found for {record_name} after {attempts} attempt(s) ({elapsed:.1f}s)."
             )
+            return
 
         elapsed = time.time() - start_time
         if elapsed >= timeout or (

@@ -33,6 +33,15 @@ def isolate_pyacme_home(tmp_path, monkeypatch):
     return home_dir
 
 
+@pytest.fixture(autouse=True)
+def no_authoritative_dns_lookup(monkeypatch):
+    """Keep tests offline: skip nameserver discovery unless a test opts in."""
+    monkeypatch.setattr(
+        "pyacmecli.acme.helper.find_authoritative_servers",
+        lambda name: (name, None),
+    )
+
+
 @pytest.fixture
 def mock_sleep(monkeypatch):
     """Eliminate all sleep calls to ensure tests run instantly."""

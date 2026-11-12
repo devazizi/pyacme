@@ -61,12 +61,15 @@ class ArvanCloud(Base):
         )
         resp.raise_for_status()
 
+        # Exact match on the relative or fully qualified name. The former
+        # substring test also matched sibling names and never matched the
+        # apex record (_acme-challenge) of the zone itself.
+        root = get_root_domain(self.domain)
+        fqdn = f"_acme-challenge.{self.domain}"
+        wanted = {fqdn, fqdn.removesuffix(f".{root}")}
         records = resp.json().get("data", [])
         for record in records:
-            if (
-                f"_acme-challenge.{self.domain.replace(f'.{get_root_domain(self.domain)}', '')}"
-                in record.get("name")
-            ):
+            if str(record.get("name", "")).rstrip(".") in wanted:
                 record_id = record.get("id")
                 delete_url = f"{self.base_url}/{record_id}"
                 del_resp = requests.delete(
